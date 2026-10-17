@@ -106,3 +106,44 @@ Oracle versions: OpenJPEG v2.5.4 (`6c4a29b0`, built locally), jai-imageio-jpeg20
 - **Decision:** corpus parity is necessary but tells us little about a decoder's completeness.
   The synthetic fixtures are the completeness bar. Option B (port OpenJPEG) stands; jpx.js parity
   would pass the corpus while failing much of the fixture matrix.
+
+## D-9 COC/QCC win over COD/QCD whatever their order (2026-10-17)
+
+- **Observed:** OpenJPEG's `opj_j2k_read_cod`/`read_qcd` copy component 0's values to every
+  component, so a COC or QCC that comes *before* the COD/QCD in the same header is overwritten.
+  T.800 A.6 gives the precedence as tile-part COC > tile-part COD > main COC > main COD, with no
+  ordering condition.
+- **Decision:** `CodestreamReader` records which components a COC/QCC set in the header being read,
+  and COD/QCD skip those. A tile's first tile-part header starts a new record, so a tile COD still
+  overrides a main-header COC. Pinned by `CodestreamReaderTest.cocPrecedence`, which builds a COC
+  placed before its COD. The two orders agree on every fixture OpenJPEG produced (it always writes
+  COD first).
+
+## D-10 TNsot is informational (2026-10-17)
+
+- **Observed:** 1,312 of 3,744 corpus streams (35%) declare TNsot one short (icepdf GH-553).
+  OpenJPEG errors on the extra tile-part unless its look-ahead correction
+  (`opj_j2k_need_nb_tile_parts_correction`) kicks in. JJ2000 drops it silently. icepdf repairs
+  the bytes before handing them to JJ2000.
+- **Decision:** tile-parts are found by walking SOT/Psot to EOC. TPsot must still run 0, 1, 2…
+  per tile (A.4.2, as in OpenJPEG). A TPsot at or beyond TNsot produces a warning, not an error.
+- **Evidence:** `tnsot-undercount.j2k` parses to the same 6 tile-parts and data lengths as
+  `tileparts-res.j2k`. The corpus sweep (`Sweep.java`, local scratch) parsed 3,744/3,744 with
+  every tile present; the only warning was this one.
+
+## D-11 PPM data kept per tile-part (2026-10-17)
+
+- **Observed:** `opj_j2k_merge_ppm` concatenates all Ippm data into one buffer, and tier-2 reads it
+  sequentially. That only works when tiles are decoded in codestream order.
+- **Decision:** keep the Nppm boundaries: chunk *k* belongs to the *k*-th tile-part in codestream
+  order (A.7.4). This allows region decode and decoding tiles in parallel. Nppm may span PPM
+  markers here; OpenJPEG requires each Nppm to fit inside one marker.
+
+## D-12 A tile-part POC replaces the main-header POC for that tile (2026-10-17)
+
+- **Observed:** OpenJPEG copies the main-header POCs into every tile and appends tile-part POCs
+  after them. T.800 A.6.6: a POC in a tile-part header overrides the main header's for that tile.
+  Later tile-parts of the same tile add to it.
+- **Decision:** the first tile-part POC of a tile clears the inherited list. **Open:** confirm the
+  exact wording against the 2019 text, and find or build a fixture with POC in both headers
+  (`opj_compress -POC` writes tile-part POCs only).

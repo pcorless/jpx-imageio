@@ -147,3 +147,20 @@ Oracle versions: OpenJPEG v2.5.4 (`6c4a29b0`, built locally), jai-imageio-jpeg20
 - **Decision:** the first tile-part POC of a tile clears the inherited list. **Open:** confirm the
   exact wording against the 2019 text, and find or build a fixture with POC in both headers
   (`opj_compress -POC` writes tile-part POCs only).
+
+## D-13 References and fixtures come from a strict-IEEE OpenJPEG build (2026-10-17)
+
+- **Observed:** the new decoder matched every reference except 2 of 4,096 samples of
+  `prec16-rgb-irr` component 1, which were off by one. Instrumenting OpenJPEG showed its float
+  for one of them was 32766.502 (rounding to 32767 + 32768 = 65535, the new decoder's answer),
+  yet the reference said 65534. The reference came from a CMake **Release** build, which adds
+  `-ffast-math` (`CMakeLists.txt`: "only set for release"). The same source built without it gives
+  65535. Fast-math lets GCC reorder float operations, so 9/7 encodes and decodes depend on the
+  build, and can drift with the compiler version.
+- **Measured:** regenerating everything with a RelWithDebInfo build (no fast-math) changed 4
+  encoded fixtures (`irr97-rgb`, `irr97-cmyk`, `layers-quality`, `prec16-rgb-irr`) and their
+  references; all integer (5/3) output was identical. Against the strict references, the new
+  decoder is bit-exact on all 68. JJ2000's icepdf baseline outcomes didn't change.
+- **Decision:** fixtures and references are built with OpenJPEG v2.5.4 RelWithDebInfo
+  (`~/dev/git/openjpeg/build-strict`). Lossy 9/7 is compared bit-exactly against that build:
+  the new decoder uses the same float operations in the same order, and Java float is strict IEEE.

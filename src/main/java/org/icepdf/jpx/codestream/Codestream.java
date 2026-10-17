@@ -326,7 +326,7 @@ public final class Codestream {
     final Tile[] tiles;
     final TileCoding defaults;
     final List<String> comments = new ArrayList<>();
-    final List<String> warnings = new ArrayList<>();
+    final List<String> warnings = java.util.Collections.synchronizedList(new ArrayList<>());
     /** Capabilities from CAP (Pcap), 0 when absent. */
     int capabilities;
 
@@ -392,6 +392,11 @@ public final class Codestream {
     /** Recoverable problems found while parsing (truncation, out-of-spec values that were clamped). */
     public List<String> warnings() {
         return Collections.unmodifiableList(warnings);
+    }
+
+    /** Records a recoverable problem found while decoding (thread-safe). */
+    public void warningsSink(String warning) {
+        warnings.add(warning);
     }
 
     public int capabilities() {

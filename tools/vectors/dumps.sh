@@ -2,7 +2,7 @@
 # Provenance: ORIGINAL. Writes opj_dump output for every .j2k fixture (CodestreamReaderTest oracle).
 # Usage: OPJ_BIN=~/dev/git/openjpeg/build/bin tools/vectors/dumps.sh
 set -e
-BIN=${OPJ_BIN:-$HOME/dev/git/openjpeg/build/bin}
+BIN=${OPJ_BIN:-$HOME/dev/git/openjpeg/build-strict/bin}
 cd "$(dirname "$0")/../../src/test/resources/fixtures"
 mkdir -p dump
 for f in *.j2k; do

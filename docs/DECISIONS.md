@@ -164,3 +164,13 @@ Oracle versions: OpenJPEG v2.5.4 (`6c4a29b0`, built locally), jai-imageio-jpeg20
 - **Decision:** fixtures and references are built with OpenJPEG v2.5.4 RelWithDebInfo
   (`~/dev/git/openjpeg/build-strict`). Lossy 9/7 is compared bit-exactly against that build:
   the new decoder uses the same float operations in the same order, and Java float is strict IEEE.
+
+## D-14 Corpus A/B: 400 of 400 real PDF streams bit-exact (2026-10-17)
+
+- **Measured:** 400 streams drawn at random (seed 613) from the 3,744 in `~/dev/jpx-corpus`. Each
+  codestream was cut out of its JP2 at SOC+SIZ and decoded by icepdf-jpx (`f460f61`) and by strict
+  OpenJPEG (`jpxref`, RelWithDebInfo). Result: 400 EXACT, 0 differences, 0 exceptions. Decode time
+  was 18.9 s in total, single-threaded and unoptimised, including JIT warm-up. Harness:
+  `CorpusAB.java` (local scratch).
+- **Meaning:** the J2K path is ready for the JP2 layer and the ImageIO reader. Performance has not
+  been tuned yet: no parallel code-blocks, generic tier-1 loops.

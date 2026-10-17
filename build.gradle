@@ -1,0 +1,60 @@
+plugins {
+    id 'java-library'
+}
+
+group = GROUP
+version = VERSION
+description = 'Pure-Java JPEG 2000 decoder and ImageIO reader'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(11)
+    }
+    withSourcesJar()
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // no runtime dependencies, by design
+    testImplementation(platform("org.junit:junit-bom:${JUNIT_BOM_VERSION}"))
+    testImplementation('org.junit.jupiter:junit-jupiter')
+    testRuntimeOnly('org.junit.platform:junit-platform-launcher')
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.compilerArgs += ['-Xlint:all', '-Xlint:-serial']
+}
+
+jar {
+    // every jar carries the licence texts and NOTICE (OpenJPEG BSD-2 requires the notice in binaries)
+    from(rootDir) {
+        include 'LICENSE', 'NOTICE'
+        into 'META-INF'
+    }
+    from('licenses') {
+        into 'META-INF/licenses'
+    }
+}
+
+sourcesJar {
+    from(rootDir) {
+        include 'LICENSE', 'NOTICE'
+        into 'META-INF'
+    }
+    from('licenses') {
+        into 'META-INF/licenses'
+    }
+}
+
+test {
+    useJUnitPlatform()
+    testLogging {
+        events 'skipped', 'failed'
+    }
+    // the provenance check reads the source tree
+    systemProperty 'jpx.projectDir', projectDir.absolutePath
+}

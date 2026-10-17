@@ -1,0 +1,5 @@
+* text=auto
+*.j2k binary
+*.jp2 binary
+*.pgx binary
+*.jar binary

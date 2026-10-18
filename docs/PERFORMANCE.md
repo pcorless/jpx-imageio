@@ -51,6 +51,7 @@ every access missed the cache: OpenJPEG does that pass 8 columns at a time for t
 | 9/7 vertical pass 16 columns at a time (opj_v8dwt layout, scalar) | 25.7 / 26.5 (+11-14%) | yes |
 | + 9/7 horizontal pass 16 rows at a time (transposed into lanes) | 23.9 | no: the transpose costs more |
 | + 9/7 horizontal lifting on split low/high arrays | 24.9 / 26.0 | no: within noise |
+| MQ registers (C, A, CT) in locals in the MQ passes (OpenJPEG's DOWNLOAD/UPLOAD_MQC_VARIABLES), decode inlined by hand at each site | 25.2 / 25.1 vs 25.9 / 26.2 (-3.5%) | no |
 
 Every change is checked bit-exact: fixtures, and the full corpus A/B (3,742 of 3,744 EXACT).
 
@@ -63,9 +64,13 @@ vertical ~17%), ICT 9%, tier-1 passes and placement 11%, level shift 3%.
    is on one thread. Code-blocks are independent, and the DWT splits into row and column strips.
    Largest lever by far for a single large image; ICEpdf already renders pages in parallel, so
    the pool must be shared and bounded.
-2. **Tier-1 state in locals.** The MQ registers (C, A, CT, position) are fields written on every
-   decision; OpenJPEG keeps them in registers inside each pass (its `DOWNLOAD/UPLOAD_MQC_VARIABLES`
-   macros). Moving them into the pass loops is a mechanical port of that form.
+2. ~~Tier-1 state in locals~~: tried, 3.5% slower (above). C2 compiled the passes normally;
+   the likely reason (not proven) is that once `MqDecoder.decode` is inlined into a pass loop,
+   C2 already keeps the MQ fields in registers (fields and `int[]` elements are separate alias
+   classes, so array stores don't force them back to memory), while the hand-inlined version
+   loses the constant-`ci` unrolling of the old step calls. Unrolling it by hand would push the
+   cleanup pass toward C2's 8,000-byte huge-method limit. Don't retry without a JMH
+   micro-benchmark of tier-1 alone.
 3. **Fuse ICT, level shift and clamp** into one pass over the three components, with float
    rounding instead of `Math.rint` on doubles.
 4. 5/3 vertical pass in column blocks (280 corpus files use 5/3).

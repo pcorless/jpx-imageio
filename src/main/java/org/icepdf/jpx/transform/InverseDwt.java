@@ -19,7 +19,9 @@
  *   9/7: the lifting constants (opj_dwt_alpha/beta/gamma/delta, opj_K, the BUG_WEIRD_TWO_INVK
  *   two_invK), opj_v8dwt_interleave_h/v, opj_v8dwt_decode, opj_v8dwt_decode_step1/2 (scalar);
  *   the level loop of opj_dwt_decode_tile / opj_dwt_decode_tile_97 (H pass on every row, then
- *   V pass on every column, per level).
+ *   V pass on every column, per level). The 9/7 V pass runs 16 columns at a time
+ *   (opj_v8dwt_decode_v does 8 for its SIMD lanes), with each lane's float operations in
+ *   OpenJPEG's order, so the result is unchanged.
  *   Changed: one lane instead of 8 (or SIMD) columns per call, same float operations in the
  *   same order; no threading.
  *   Algorithm: ITU-T T.800 Annex F.
@@ -167,6 +169,7 @@ public final class InverseDwt {
     public static void decode97(float[] a, int w, Resolution[] res, int numRes) {
         if (numRes <= 1 || w == 0) return;
         float[] wav = new float[maxResolutionSize(res, numRes) + 1];
+        float[] lanes = new float[(maxResolutionSize(res, numRes) + 1) * LANES];
         int rw = res[0].width(), rh = res[0].height();
         for (int r = 1; r < numRes; r++) {
             int hsn = rw, vsn = rh;
@@ -182,11 +185,66 @@ public final class InverseDwt {
             }
             int vdn = rh - vsn;
             int vcas = res[r].y0 % 2;
-            for (int i = 0; i < rw; i++) {
-                interleave(a, i, w, wav, vsn, vdn, vcas);
-                decode1(wav, vsn, vdn, vcas);
-                for (int k = 0; k < rh; k++) a[i + k * w] = wav[k];
+            // opj_v8dwt: LANES columns at a time, so each row is read and written contiguously
+            for (int i = 0; i < rw; i += LANES) {
+                int nl = Math.min(LANES, rw - i);
+                interleaveV(a, i, w, lanes, vsn, vdn, vcas, nl);
+                decodeLanes(lanes, vsn, vdn, vcas, nl);
+                for (int k = 0, o = i; k < rh; k++, o += w) System.arraycopy(lanes, k * LANES, a, o, nl);
             }
+        }
+    }
+
+    /** Columns per vertical pass: opj_v8dwt's 8, doubled (no SIMD lanes to match in Java). */
+    static final int LANES = 16;
+
+    /** opj_v8dwt_interleave_v: rows of {@code nl} columns into lanes[k * LANES + lane]. */
+    private static void interleaveV(float[] a, int col, int w, float[] lanes, int sn, int dn, int cas, int nl) {
+        int ai = col;
+        for (int i = 0, bi = cas; i < sn; i++, bi += 2, ai += w) System.arraycopy(a, ai, lanes, bi * LANES, nl);
+        for (int i = 0, bi = 1 - cas; i < dn; i++, bi += 2, ai += w) System.arraycopy(a, ai, lanes, bi * LANES, nl);
+    }
+
+    /** opj_v8dwt_decode over {@code nl} lanes: the same float operations, in the same order, per lane. */
+    private static void decodeLanes(float[] wav, int sn, int dn, int cas, int nl) {
+        int a, b;
+        if (cas == 0) {
+            if (!(dn > 0 || sn > 1)) return;
+            a = 0;
+            b = 1;
+        } else {
+            if (!(sn > 0 || dn > 1)) return;
+            a = 1;
+            b = 0;
+        }
+        step1Lanes(wav, a, sn, K, nl);
+        step1Lanes(wav, b, dn, TWO_INV_K, nl);
+        step2Lanes(wav, b, a + 1, sn, Math.min(sn, dn - a), -DELTA, nl);
+        step2Lanes(wav, a, b + 1, dn, Math.min(dn, sn - b), -GAMMA, nl);
+        step2Lanes(wav, b, a + 1, sn, Math.min(sn, dn - a), -BETA, nl);
+        step2Lanes(wav, a, b + 1, dn, Math.min(dn, sn - b), -ALPHA, nl);
+    }
+
+    private static void step1Lanes(float[] wav, int base, int n, float c, int nl) {
+        for (int i = 0, o = base * LANES; i < n; i++, o += 2 * LANES) {
+            for (int l = 0; l < nl; l++) wav[o + l] = wav[o + l] * c;
+        }
+    }
+
+    private static void step2Lanes(float[] wav, int l0, int base, int end, int m, float c, int nl) {
+        int imax = Math.min(end, m);
+        int fl = l0 * LANES;
+        int fw = base * LANES;
+        for (int i = 0; i < imax; i++) {
+            int t = fw - LANES;
+            for (int l = 0; l < nl; l++) wav[t + l] = wav[t + l] + ((wav[fl + l] + wav[fw + l]) * c);
+            fl = fw;
+            fw += 2 * LANES;
+        }
+        if (m < end) {
+            c += c;
+            int t = fw - LANES;
+            for (int l = 0; l < nl; l++) wav[t + l] = wav[t + l] + wav[fl + l] * c;
         }
     }
 

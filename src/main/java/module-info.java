@@ -16,13 +16,13 @@
  * Provenance: ORIGINAL.
  */
 /** A pure-Java JPEG 2000 decoder and its ImageIO reader. */
-module org.icepdf.jpx {
+module io.github.pcorless.jpx {
     requires transitive java.desktop;
 
-    exports org.icepdf.jpx;
-    exports org.icepdf.jpx.codestream;
-    exports org.icepdf.jpx.jp2;
-    exports org.icepdf.jpx.imageio;
+    exports io.github.pcorless.jpx;
+    exports io.github.pcorless.jpx.codestream;
+    exports io.github.pcorless.jpx.jp2;
+    exports io.github.pcorless.jpx.imageio;
 
-    provides javax.imageio.spi.ImageReaderSpi with org.icepdf.jpx.imageio.Jpeg2000ImageReaderSpi;
+    provides javax.imageio.spi.ImageReaderSpi with io.github.pcorless.jpx.imageio.Jpeg2000ImageReaderSpi;
 }

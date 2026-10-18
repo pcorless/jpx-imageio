@@ -1,9 +1,10 @@
-<!-- Copied from icepdf core/core-awt/tools/jpx-fixtures (GH-613, 1bdd9515d); this copy is now the master. -->
+<!-- Origin: started in the ICEpdf repository (issue GH-613, commit 1bdd9515d); maintained here since. -->
 
-# JPEG 2000 decisions and observations (GH-613)
+# JPEG 2000 decisions and observations
 
 The `INFERRED` evidence log required by `PROVENANCE-RULES.md`. Each entry: what we observed, how to
-reproduce it, and what it decided. This file moves to the decoder repository when that exists.
+reproduce it, and what it decided. Entries are a dated record and stay as written: the early
+ones were made inside ICEpdf (the first host, whose PDFs make up the test corpus) and say so.
 
 Oracle versions: OpenJPEG v2.5.4 (`6c4a29b0`, built locally), jai-imageio-jpeg2000 1.4.0 (JJ2000).
 
@@ -168,7 +169,7 @@ Oracle versions: OpenJPEG v2.5.4 (`6c4a29b0`, built locally), jai-imageio-jpeg20
 ## D-14 Corpus A/B: 400 of 400 real PDF streams bit-exact (2026-10-17)
 
 - **Measured:** 400 streams drawn at random (seed 613) from the 3,744 in `~/dev/jpx-corpus`. Each
-  codestream was cut out of its JP2 at SOC+SIZ and decoded by icepdf-jpx (`f460f61`) and by strict
+  codestream was cut out of its JP2 at SOC+SIZ and decoded by jpx-imageio (`f460f61`) and by strict
   OpenJPEG (`jpxref`, RelWithDebInfo). Result: 400 EXACT, 0 differences, 0 exceptions. Decode time
   was 18.9 s in total, single-threaded and unoptimised, including JIT warm-up. Harness:
   `CorpusAB.java` (local scratch).
@@ -256,11 +257,11 @@ code, which isn't ported). `Jpeg2000Layout` decides, ORIGINAL:
 ## D-21 Threads on by default, own ForkJoinPool, capped at 8 (2026-10-17)
 
 - **Decided with the maintainer:** threads on by default for plain `ImageIO.read` users, with
-  overrides for small hardware: `-Dorg.icepdf.jpx.parallelism=N` (`1` = none),
+  overrides for small hardware: `-Dio.github.pcorless.jpx.parallelism=N` (`1` = none),
   `Jpeg2000Threads.setDefaults(...)`, per decode `Options.threads` / `Jpeg2000ImageReadParam`.
 - **Pool:** a `ForkJoinPool` owned by the library rather than `ForkJoinPool.commonPool()`: the
   common pool is shared with parallel streams and sized by another property, and on 1-2 core
-  machines it degrades in ways the library doesn't control. Daemon threads named `icepdf-jpx-N`,
+  machines it degrades in ways the library doesn't control. Daemon threads named `jpx-imageio-N`,
   `parallelism - 1` of them (the calling thread is the last worker).
 - **Scheduling is caller-helps, not `join()`:** an ICEpdf worker (not a pool thread) that joins
   a ForkJoinTask can simply block; `Parallel.forEach` never waits for a queued helper.

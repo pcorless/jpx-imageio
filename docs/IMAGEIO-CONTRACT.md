@@ -1,10 +1,9 @@
-<!-- Copied from icepdf core/core-awt/tools/jpx-fixtures (GH-613, 1bdd9515d); this copy is now the master. -->
-# JPEG 2000 reader: ImageIO contract (GH-613)
+<!-- Origin: started in the ICEpdf repository (issue GH-613, commit 1bdd9515d); maintained here since. -->
+# JPEG 2000 reader: ImageIO contract
 
-The decoder ships as a normal `javax.imageio` plug-in. It isn't an ICEpdf-only API, so any Java
-code (`ImageIO.read(file)`, TwelveMonkeys users, other PDF libraries) gets JPEG 2000 just by adding
-the jar. ICEpdf talks to it only through ImageIO, exactly as it talks to JJ2000 today. Swapping
-the decoder means swapping a jar.
+The decoder ships as a normal `javax.imageio` plug-in, so any Java code (`ImageIO.read(file)`,
+TwelveMonkeys users, PDF libraries) gets JPEG 2000 just by adding the jar. A host that talks to it
+only through ImageIO can swap it for another JPEG 2000 reader (JJ2000) by swapping a jar.
 
 **Registration**
 - `META-INF/services/javax.imageio.spi.ImageReaderSpi`, plus `provides` in `module-info` so it
@@ -15,9 +14,9 @@ the decoder means swapping a jar.
 - `canDecodeInput` sniffs without consuming: `mark()`/`reset()` on the `ImageInputStream`, and
   only the SOC/SIZ or JP2 signature is checked.
 - When JJ2000 is also on the class path, implement `onRegistration` to order ours ahead of it
-  with `IIORegistry.setOrdering`. ICEpdf additionally prefers ours by SPI class name.
+  with `IIORegistry.setOrdering`. A host can also pick it by SPI class name.
 - Fat jars must merge the services files: unpacking jars keeps only the first
-  `META-INF/services/javax.imageio.spi.ImageReaderSpi` (the viewers' Gradle `mergeServices` task and
+  `META-INF/services/javax.imageio.spi.ImageReaderSpi` (for example a Gradle `mergeServices` task or the
   Maven `metaInf-services` containerDescriptorHandler exist for this).
 
 **`ImageReader` surface**
@@ -32,7 +31,7 @@ the decoder means swapping a jar.
   - source and destination bands
   - destination type and offset
 - `canReadRaster` is true. `readRaster` returns raw component values with no colour conversion.
-  This is the path ICEpdf uses.
+  This is the path a PDF renderer uses: it applies the PDF's own colour space.
 - `read` applies `colr` (enumerated or ICC), `pclr` and `cdef`, so plain `ImageIO.read` users
   get correct colours.
 - Listeners and lifecycle: `IIOReadProgressListener` / `IIOReadWarningListener` (recoverable
@@ -42,15 +41,13 @@ the decoder means swapping a jar.
   dimension/resolution from `res`) plus a minimal native tree (boxes, SIZ/COD summary).
   `getStreamMetadata` returns null.
 
-**Tests:** `Jpeg2000ImageReaderContractTest` with the same shape as TwelveMonkeys'
-`ImageReaderAbstractTest` (or that class itself, if the project goes there). Run it against JJ2000
-in Phase 0 to record which behaviours the old reader gets wrong (`baseline/contract-*.tsv`), then
-against ours.
+**Tests:** `ImageReaderContractTest`, with the same shape as TwelveMonkeys'
+`ImageReaderAbstractTest`. (Its first form ran against JJ2000 too, to record which behaviours that
+reader gets wrong.)
 
 **Status (2026-10-17):** `ImageReaderContractTest` (these checks, all required to pass, plus a
-plain `ImageIO.read` with no ICEpdf on the class path) and `ReaderConformanceTest` (every
-fixture reference through `readRaster` and `read`) pass. ICEpdf's own suites run against this
-reader with `-PjpxJar=...`: contract 28/28 PASS. Deviations from the text above:
+plain `ImageIO.read` with nothing else on the class path) and `ReaderConformanceTest` (every
+fixture reference through `readRaster` and `read`) pass. Deviations from the text above:
 - `IIORegistry.setOrdering` in `onRegistration` only covers readers registered first; hence
   `Jpeg2000ImageReaderSpi.preferOverOtherReaders()` (D-20).
 - `abort()` is checked between tiles, not between code-blocks.

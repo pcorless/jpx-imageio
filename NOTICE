@@ -1,4 +1,4 @@
-ICEpdf JPEG 2000 decoder (icepdf-jpx)
+jpx-imageio: a pure-Java JPEG 2000 decoder and ImageIO reader
 Copyright 2026 Patrick Corless
 
 Licensed under the Apache License, Version 2.0 (see LICENSE).

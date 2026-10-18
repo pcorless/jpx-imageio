@@ -1,5 +1,5 @@
-<!-- Copied from icepdf core/core-awt/tools/jpx-fixtures (GH-613, 1bdd9515d); this copy is now the master. -->
-# JPEG 2000 decoder: provenance and audit trail (GH-613)
+<!-- Origin: started in the ICEpdf repository (issue GH-613, commit 1bdd9515d); maintained here since. -->
+# JPEG 2000 decoder: provenance and audit trail
 
 Requirement from day one, not cleaned up afterwards. Anyone adopting the code (TwelveMonkeys, a
 legal review, us in five years) must be able to answer for each piece of code: did it come from

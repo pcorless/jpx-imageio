@@ -1,6 +1,6 @@
 /*
  * Provenance: ORIGINAL. Times JPEG 2000 decoding of a list of files in one JVM, single-threaded.
- *   java -cp icepdf-jpx.jar[:jai-imageio-*.jar] JpxBench.java <ours|jj2000> <warmupFiles> <listFile>
+ *   java -cp jpx-imageio.jar[:jai-imageio-*.jar] JpxBench.java <ours|jj2000> <warmupFiles> <listFile>
  * Prints per file: path, ok|fail|timeout, ms, megapixels (width*height of the image). The first
  * <warmupFiles> files of the list are decoded once untimed first, to warm the JIT.
  */
@@ -18,7 +18,7 @@ public class JpxBench {
     interface Decoder { long decode(byte[] b) throws Exception; }
 
     static long ours(byte[] b) throws Exception {
-        org.icepdf.jpx.Jpeg2000Image img = org.icepdf.jpx.Jpeg2000Decoder.decodeImage(b, 0, b.length, 0);
+        io.github.pcorless.jpx.Jpeg2000Image img = io.github.pcorless.jpx.Jpeg2000Decoder.decodeImage(b, 0, b.length, 0);
         return (long) img.components[0].width * img.components[0].height;
     }
 

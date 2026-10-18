@@ -1,6 +1,8 @@
 # Performance
 
-How fast icepdf-jpx decodes, against what, and where its time goes. Tools: `tools/bench/`.
+_A dated record: measurements and plans as made, with ICEpdf as the first host._
+
+How fast jpx-imageio decodes, against what, and where its time goes. Tools: `tools/bench/`.
 
 ## Method
 
@@ -20,12 +22,12 @@ How fast icepdf-jpx decodes, against what, and where its time goes. Tools: `tool
 
 | Decoder | Corpus time | MP/s | < 0.1 MP | 0.1-1 MP | 1-4 MP | > 4 MP |
 |---|---|---|---|---|---|---|
-| icepdf-jpx | 175.8 s | 24.2 | 19.3 | 27.2 | 19.7 | 28.3 |
+| jpx-imageio | 175.8 s | 24.2 | 19.3 | 27.2 | 19.7 | 28.3 |
 | OpenJPEG strict `-O2` | 138.5 s | 30.7 | 24.8 | 34.6 | 25.8 | 34.8 |
 | OpenJPEG Release `-O3 -ffast-math` | 114.2 s | 37.2 | 29.9 | 43.9 | 30.4 | 43.0 |
 | JJ2000 1.4.0 (3,732 files both decode) | 1,618 s | 2.6 | | | | |
 
-icepdf-jpx ran at 0.79x strict OpenJPEG and 0.65x its stock build, and 9.6x faster than
+jpx-imageio ran at 0.79x strict OpenJPEG and 0.65x its stock build, and 9.6x faster than
 JJ2000 on the 3,732 files both decode (169 s against 1,618 s). JJ2000 also timed out, at 20 s
 each, on 10 files.
 
@@ -63,7 +65,7 @@ vertical ~17%), ICT 9%, tier-1 passes and placement 11%, level shift 3%.
 ## Threads (2026-10-17)
 
 `Jpeg2000Threads` / `THREADING-PLAN.md`. Every 4th corpus file, pinned to the 16 physical cores
-(CPUs 0-15), wall-clock per file, `-Dorg.icepdf.jpx.parallelism=N`:
+(CPUs 0-15), wall-clock per file, `-Dio.github.pcorless.jpx.parallelism=N`:
 
 | Images | 1 | 2 | 4 | 8 | 16 threads |
 |---|---|---|---|---|---|

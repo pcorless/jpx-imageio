@@ -1,5 +1,7 @@
 # Threading plan (2026-10-17)
 
+_A dated record: measurements and plans as made, with ICEpdf as the first host._
+
 **Status: implemented** (commits 78f8206 and after), with these changes from the proposal: the
 default pool is a library-owned `ForkJoinPool` (D-21), an options object was added
 (`Jpeg2000Decoder.Options`), progress is reported on the calling thread, and a single tile that
@@ -75,14 +77,14 @@ public final class Jpeg2000Threads {
 - **ImageIO:** `getDefaultReadParam()` returns a `Jpeg2000ImageReadParam extends
   ImageReadParam` with `setThreads(Jpeg2000Threads)`; a plain `ImageReadParam` means
   `Jpeg2000Threads.defaults()`.
-- **Default:** a lazily started, shared, daemon pool owned by icepdf-jpx with parallelism
+- **Default:** a lazily started, shared, daemon pool owned by jpx-imageio with parallelism
   `min(availableProcessors, 8)` (8 because past that tier-2 and memory bandwidth flatten the
-  curve; to be measured), overridable with system property `org.icepdf.jpx.parallelism`
+  curve; to be measured), overridable with system property `io.github.pcorless.jpx.parallelism`
   (`1` = no threads). Being one shared, bounded pool, nested use from many callers can never
   run more than `parallelism` helper threads in total, plus the callers themselves.
 - **ICEpdf** (no compile dependency needed): either leave the default, or set
-  `-Dorg.icepdf.jpx.parallelism=N` from its `threadPoolCap` logic. If tighter integration is
-  wanted later, ICEpdf can compile against icepdf-jpx optionally and call
+  `-Dio.github.pcorless.jpx.parallelism=N` from its `threadPoolCap` logic. If tighter integration is
+  wanted later, ICEpdf can compile against jpx-imageio optionally and call
   `Jpeg2000Threads.setDefaults(of(Library.getImageThreadPool(), n))` when the class is present,
   so decode helpers share ICEpdf's own cap.
 - **Small images stay serial:** parallel loops only start above a work threshold (first guess:
@@ -110,7 +112,7 @@ public final class Jpeg2000Threads {
 ## Open questions for review
 
 - Default on or off for plain ImageIO users? Proposed **on** (bounded shared pool), as
-  OpenJPEG's own tools default to threads; `org.icepdf.jpx.parallelism=1` turns it off.
+  OpenJPEG's own tools default to threads; `io.github.pcorless.jpx.parallelism=1` turns it off.
 - Own pool vs `ForkJoinPool.commonPool()`: proposed own pool, because the common pool is shared
   with parallel streams and its size is set elsewhere.
 - Is an options object worth it now, or keep adding overloads until a third knob arrives?

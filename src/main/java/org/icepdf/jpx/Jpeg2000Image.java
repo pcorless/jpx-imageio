@@ -47,8 +47,12 @@ public final class Jpeg2000Image {
     }
 
     public ColourSpace colourSpace() {
-        if (header == null) return ColourSpace.UNSPECIFIED;
-        switch (header.enumeratedColourSpace()) {
+        return header == null ? ColourSpace.UNSPECIFIED : colourSpaceOf(header.enumeratedColourSpace());
+    }
+
+    /** OPJ_COLOR_SPACE for a colr EnumCS (-1 for none). */
+    public static ColourSpace colourSpaceOf(int enumcs) {
+        switch (enumcs) {
             case 16: return ColourSpace.SRGB;
             case 17: return ColourSpace.GRAY;
             case 18: return ColourSpace.SYCC;

@@ -220,3 +220,35 @@ Oracle versions: OpenJPEG v2.5.4 (`6c4a29b0`, built locally), jai-imageio-jpeg20
   them and so do we. **Open:** in a PDF these may still be renderable as indices when the image
   dictionary supplies an /Indexed ColorSpace; decide when the ImageIO reader exposes the raw
   (pre-palette) components.
+
+## D-19 Colour models for read(): what a JP2 says, else a guess by channel count (2026-10-17)
+
+ImageIO needs a ColorModel; OpenJPEG has no equivalent (`opj_decompress` guesses in its app
+code, which isn't ported). `Jpeg2000Layout` decides, ORIGINAL:
+- **colr wins when it fits.** A usable ICC profile (meth 2) or EnumCS 16/17/12 is used when the
+  number of colour channels matches (cdef type 0; without cdef, the surplus channels after the
+  colour space's own become extras). EnumCS 18/24 (sYCC/eYCC) are read as RGB **without
+  conversion**, with a warning; CIELab and other EnumCS fall to the guess. **Open:** YCC and Lab
+  conversion (not in the corpus: 2,691 sRGB, 574 CMYK, 410 grey, 67 ICC).
+- **Guess, for bare codestreams and misfits:** 1 grey, 2 grey + alpha, 3 sRGB, 4 CMYK (as pdf.js
+  and Acrobat treat a bare 4-component codestream), otherwise a generic n-channel space.
+- **Opacity:** the first cdef opacity (or premultiplied) channel becomes the alpha band, moved
+  last (ComponentColorModel needs it there); without cdef, the first surplus channel. Any other
+  extra channel turns the model generic so no band is dropped: ICEpdf reads every band of the
+  raster and applies the PDF's own colour space.
+- **Samples are never converted:** bands hold the decoded values at their own depth; signed
+  channels are level-shifted by 2^(p-1). `readRaster` gives the same values in channel order.
+- **Observed:** `jp2-cmyk.jp2` is named CMYK but `opj_compress` wrote EnumCS 16 (sRGB) and no
+  cdef for its 4 raw components, so it reads as RGB + alpha. Its samples are what matter to the
+  conformance tests and ICEpdf, which applies the PDF's /ColorSpace.
+
+## D-20 Ordering ahead of JJ2000 is only automatic when JJ2000 registered first (2026-10-17)
+
+- **Measured:** with both jars on the class path, `ImageIO.getImageReadersByFormatName("jpeg2000")`
+  returns ours first when JJ2000's jar comes first, and JJ2000 first when ours does.
+  `onRegistration` can order against providers that are already registered; ImageIO has no hook
+  for ones registered later.
+- **Decision:** keep the `onRegistration` ordering, and add
+  `Jpeg2000ImageReaderSpi.preferOverOtherReaders()` for applications to call (after any
+  `ImageIO.scanForPlugins()`). ICEpdf selects by SPI class name, as the contract already says.
+  Deregistering JJ2000 was rejected: an application may want both.

@@ -14,12 +14,12 @@
  * limitations under the License.
  *
  * Provenance: ADAPTED from OpenJPEG src/lib/openjp2/j2k.c @ 6c4a29b0 (BSD-2):
- *   the component geometry of opj_j2k_update_image_dimensions (ceildiv by dx/dy, then
- *   ceildivpow2 by the reduce factor) and the tile copy of opj_j2k_update_image_data.
- *   Changed: tiles are decoded one after another into whole-image component arrays; no
- *   decode-area window yet. decodeImage is ORIGINAL glue: format sniffing as jpxref.c, the
- *   IHDR/SIZ size check and BPC warning of opj_j2k_read_siz, then opj_jp2_decode's
- *   post-processing (Jp2Channels).
+ *   the component geometry of opj_j2k_update_image_dimensions and opj_j2k_set_decode_area
+ *   (ceildiv by dx/dy, then ceildivpow2 by the reduce factor) and the tile copy of opj_j2k_update_image_data.
+ *   Changed: tiles are decoded one after another into the output arrays; only the tiles that meet a decode area are decoded,
+ *   each one whole, then cropped (OpenJPEG decodes just the code-blocks the area needs);
+ *   a per-tile Progress hook can stop the decode. decodeImage is ORIGINAL glue around
+ *   Jpeg2000Headers and opj_jp2_decode's post-processing (Jp2Channels).
  */
 /*
  * The copyright in this software is being made available under the 2-clauses
@@ -68,8 +68,6 @@ package org.icepdf.jpx;
 import org.icepdf.jpx.codestream.Codestream;
 import org.icepdf.jpx.codestream.CodestreamReader;
 import org.icepdf.jpx.jp2.Jp2Channels;
-import org.icepdf.jpx.jp2.Jp2Header;
-import org.icepdf.jpx.jp2.Jp2Reader;
 import org.icepdf.jpx.tile.TileDecoder;
 import org.icepdf.jpx.tile.TileDecoder.DecodedComponent;
 
@@ -127,32 +125,19 @@ public final class Jpeg2000Decoder {
      * as opj_decode applies them.
      */
     public static Jpeg2000Image decodeImage(byte[] data, int offset, int length, int reduce) throws JpxException {
-        if (length >= 2 && (data[offset] & 0xff) == 0xff && (data[offset + 1] & 0xff) == 0x4f) {
-            Codestream cs = CodestreamReader.read(data, offset, length);
-            return new Jpeg2000Image(decode(cs, reduce), null, cs.warnings());
-        }
-        Jp2Header h = Jp2Reader.read(data, offset, length);
-        Codestream cs = CodestreamReader.read(data, h.codestreamOffset, h.codestreamLength);
-        // opj_j2k_read_siz
-        long sizW = (long) cs.x1 - cs.x0, sizH = (long) cs.y1 - cs.y0;
-        if (h.width != sizW || h.height != sizH) {
-            throw new JpxException("Error with SIZ marker: IHDR w(" + h.width + ") h(" + h.height + ") vs. SIZ w("
-                    + sizW + ") h(" + sizH + ")");
-        }
+        Jpeg2000Headers h = Jpeg2000Headers.read(data, offset, length);
+        Codestream cs = h.codestream;
+        return decodeImage(h, reduce, cs.x0, cs.y0, cs.x1, cs.y1, null);
+    }
+
+    /** Decodes an area of the reference grid (see {@link #decode(Codestream, int, long, long, long, long, Progress)}). */
+    public static Jpeg2000Image decodeImage(Jpeg2000Headers h, int reduce, long ax0, long ay0, long ax1, long ay1,
+                                            Progress progress) throws JpxException {
         List<String> warnings = new ArrayList<>(h.warnings());
-        if (h.bitsPerComponent != 255) {
-            for (int c = 1; c < cs.components.length; c++) {
-                if (cs.components[c].precision != cs.components[0].precision
-                        || cs.components[c].signed != cs.components[0].signed) {
-                    warnings.add("Despite JP2 BPC!=255, precision and/or sgnd values for comp[" + c
-                            + "] is different than comp[0]");
-                }
-            }
-        }
-        Component[] comps = decode(cs, reduce);
-        warnings.addAll(cs.warnings());
-        comps = Jp2Channels.apply(h, comps, warnings);
-        return new Jpeg2000Image(comps, h, warnings);
+        Component[] comps = decode(h.codestream, reduce, ax0, ay0, ax1, ay1, progress);
+        warnings.addAll(h.codestream.warnings());
+        if (h.jp2 != null) comps = Jp2Channels.apply(h.jp2, comps, warnings);
+        return new Jpeg2000Image(comps, h.jp2, warnings);
     }
 
     /** Decodes the codestream in {@code data[offset, offset + length)} with {@code reduce} levels discarded. */
@@ -160,42 +145,81 @@ public final class Jpeg2000Decoder {
         return decode(CodestreamReader.read(data, offset, length), reduce);
     }
 
+    /** Called after each tile; return false to stop (the components keep what was decoded). */
+    public interface Progress {
+        boolean tileDone(int done, int total);
+    }
+
     public static Component[] decode(Codestream cs, int reduce) throws JpxException {
+        return decode(cs, reduce, cs.x0, cs.y0, cs.x1, cs.y1, null);
+    }
+
+    /**
+     * Decodes the area {@code [ax0, ax1) x [ay0, ay1)} of the reference grid, clipped to the image,
+     * as opj_set_decode_area defines the output: each component covers
+     * ceildivpow2(ceildiv(a, dx), reduce) of the area's edges. Only tiles that meet the area are
+     * decoded, each one whole (OpenJPEG decodes only the code-blocks the area needs; the samples
+     * inside the area are the same).
+     */
+    public static Component[] decode(Codestream cs, int reduce, long ax0, long ay0, long ax1, long ay1,
+                                     Progress progress) throws JpxException {
+        // opj_j2k_set_decode_area: clip to the image
+        int x0 = (int) Math.max(ax0, cs.x0), y0 = (int) Math.max(ay0, cs.y0);
+        int x1 = (int) Math.min(ax1, cs.x1), y1 = (int) Math.min(ay1, cs.y1);
+        if (x0 >= x1 || y0 >= y1) throw new JpxException("decode area " + ax0 + "," + ay0 + "," + ax1 + "," + ay1
+                + " is outside the image");
         int nc = cs.components.length;
         int[] cx0 = new int[nc], cy0 = new int[nc], cw = new int[nc], ch = new int[nc];
         int[][] samples = new int[nc][];
         for (int c = 0; c < nc; c++) {
             Codestream.Component ic = cs.components[c];
-            int x0 = ceilDivPow2(ceilDiv(cs.x0, ic.dx), reduce);
-            int y0 = ceilDivPow2(ceilDiv(cs.y0, ic.dy), reduce);
-            int x1 = ceilDivPow2(ceilDiv(cs.x1, ic.dx), reduce);
-            int y1 = ceilDivPow2(ceilDiv(cs.y1, ic.dy), reduce);
-            cx0[c] = x0;
-            cy0[c] = y0;
-            cw[c] = x1 - x0;
-            ch[c] = y1 - y0;
+            int cx = ceilDivPow2(ceilDiv(x0, ic.dx), reduce);
+            int cy = ceilDivPow2(ceilDiv(y0, ic.dy), reduce);
+            int cx1 = ceilDivPow2(ceilDiv(x1, ic.dx), reduce);
+            int cy1 = ceilDivPow2(ceilDiv(y1, ic.dy), reduce);
+            cx0[c] = cx;
+            cy0[c] = cy;
+            cw[c] = cx1 - cx;
+            ch[c] = cy1 - cy;
             long size = (long) cw[c] * ch[c];
             if (size > Integer.MAX_VALUE - 8) throw JpxException.unsupported("component of " + size + " samples");
             samples[c] = new int[(int) size];
         }
+        // tiles that meet the area (B.3)
+        int p0 = (int) Math.max(0, ((long) x0 - cs.tileX0) / cs.tileWidth);
+        int q0 = (int) Math.max(0, ((long) y0 - cs.tileY0) / cs.tileHeight);
+        int p1 = Math.min(cs.tilesX, ceilDiv((long) x1 - cs.tileX0, cs.tileWidth));
+        int q1 = Math.min(cs.tilesY, ceilDiv((long) y1 - cs.tileY0, cs.tileHeight));
+        int total = (p1 - p0) * (q1 - q0), done = 0;
         TileDecoder decoder = new TileDecoder();
-        for (int t = 0; t < cs.numTiles(); t++) {
-            if (cs.tile(t) == null) {
-                cs.warningsSink("tile " + t + " has no tile-parts; left empty");
-                continue;
-            }
-            DecodedComponent[] tile = decoder.decode(cs, t, reduce);
-            for (int c = 0; c < nc; c++) {
-                DecodedComponent dc = tile[c];
-                // opj_j2k_update_image_data: copy the tile's area into the component
-                int ox = dc.x0 - cx0[c], oy = dc.y0 - cy0[c];
-                int w = Math.min(dc.width(), cw[c] - ox);
-                for (int j = 0; j < dc.height() && oy + j < ch[c]; j++) {
-                    if (oy + j < 0 || w <= 0 || ox < 0) continue;
-                    System.arraycopy(dc.samples, j * dc.width(), samples[c], (oy + j) * cw[c] + ox, w);
+        for (int q = q0; q < q1; q++) {
+            for (int p = p0; p < p1; p++) {
+                int t = q * cs.tilesX + p;
+                if (cs.tile(t) == null) {
+                    cs.warningsSink("tile " + t + " has no tile-parts; left empty");
+                } else {
+                    DecodedComponent[] tile = decoder.decode(cs, t, reduce);
+                    for (int c = 0; c < nc; c++) copy(tile[c], samples[c], cx0[c], cy0[c], cw[c], ch[c]);
                 }
+                if (progress != null && !progress.tileDone(++done, total)) return result(cs, cw, ch, samples);
             }
         }
+        return result(cs, cw, ch, samples);
+    }
+
+    /** opj_j2k_update_image_data: copy the part of a tile-component inside the output window. */
+    private static void copy(DecodedComponent dc, int[] dst, int wx0, int wy0, int ww, int wh) {
+        int sx0 = Math.max(dc.x0, wx0), sx1 = Math.min(dc.x1, wx0 + ww);
+        int sy0 = Math.max(dc.y0, wy0), sy1 = Math.min(dc.y1, wy0 + wh);
+        if (sx0 >= sx1) return;
+        for (int y = sy0; y < sy1; y++) {
+            System.arraycopy(dc.samples, (y - dc.y0) * dc.width() + (sx0 - dc.x0), dst, (y - wy0) * ww + (sx0 - wx0),
+                    sx1 - sx0);
+        }
+    }
+
+    private static Component[] result(Codestream cs, int[] cw, int[] ch, int[][] samples) {
+        int nc = cs.components.length;
         Component[] out = new Component[nc];
         for (int c = 0; c < nc; c++) {
             out[c] = new Component(cw[c], ch[c], cs.components[c].precision, cs.components[c].signed, samples[c]);

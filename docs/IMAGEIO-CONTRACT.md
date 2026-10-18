@@ -45,4 +45,14 @@ the decoder means swapping a jar.
 **Tests:** `Jpeg2000ImageReaderContractTest` with the same shape as TwelveMonkeys'
 `ImageReaderAbstractTest` (or that class itself, if the project goes there). Run it against JJ2000
 in Phase 0 to record which behaviours the old reader gets wrong (`baseline/contract-*.tsv`), then
-against ours. Still owed: a plain `ImageIO.read(File)` smoke test with no ICEpdf on the class path.
+against ours.
+
+**Status (2026-10-17):** `ImageReaderContractTest` (these checks, all required to pass, plus a
+plain `ImageIO.read` with no ICEpdf on the class path) and `ReaderConformanceTest` (every
+fixture reference through `readRaster` and `read`) pass. ICEpdf's own suites run against this
+reader with `-PjpxJar=...`: contract 28/28 PASS. Deviations from the text above:
+- `IIORegistry.setOrdering` in `onRegistration` only covers readers registered first; hence
+  `Jpeg2000ImageReaderSpi.preferOverOtherReaders()` (D-20).
+- `abort()` is checked between tiles, not between code-blocks.
+- Subsampled components are upsampled (nearest neighbour) so all bands share one grid.
+- Colour: sYCC/eYCC are not converted to RGB, CIELab is not supported (D-19).

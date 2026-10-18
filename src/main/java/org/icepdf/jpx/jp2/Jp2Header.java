@@ -248,6 +248,13 @@ public final class Jp2Header {
 
     final List<String> warnings = new ArrayList<>();
 
+    /** A box type (or brand) as its four characters. */
+    public static String boxName(long type) {
+        StringBuilder sb = new StringBuilder(4);
+        for (int s = 24; s >= 0; s -= 8) sb.append((char) ((type >> s) & 0xff));
+        return sb.toString();
+    }
+
     public List<Colour> colours() {
         return Collections.unmodifiableList(colours);
     }

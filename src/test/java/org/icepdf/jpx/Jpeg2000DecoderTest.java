@@ -33,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 public class Jpeg2000DecoderTest {
 
-    static byte[] fixture(String path) {
+    public static byte[] fixture(String path) {
         try (InputStream in = Jpeg2000DecoderTest.class.getResourceAsStream("/fixtures/" + path)) {
             if (in == null) throw new IllegalArgumentException("no fixture " + path);
             return in.readAllBytes();
@@ -43,18 +43,18 @@ public class Jpeg2000DecoderTest {
     }
 
     /** references.tsv rows: name, file, tag, components, reduce, region, kind. */
-    static List<String[]> references() {
+    public static List<String[]> references() {
         List<String[]> out = new ArrayList<>();
         for (String line : new String(fixture("references.tsv"), StandardCharsets.US_ASCII).split("\n")) {
             if (line.startsWith("#") || line.isEmpty()) continue;
             String[] f = line.split("\t", -1);
-            if (f[5].isEmpty()) out.add(f); // regions: not implemented yet
+            out.add(f);
         }
         return out;
     }
 
     /** dims: width, height, precision, signed (0/1). */
-    static int[] pgx(byte[] b, int[] dims) {
+    public static int[] pgx(byte[] b, int[] dims) {
         int nl = 0;
         while (b[nl] != '\n') nl++;
         String[] h = new String(b, 0, nl, StandardCharsets.US_ASCII).trim().split("\\s+");
@@ -84,8 +84,14 @@ public class Jpeg2000DecoderTest {
     public void matchesOpenJpeg(String name, String file, String tag, String comps, String reduce, String region, String kind)
             throws JpxException {
         byte[] data = fixture(file);
+        Jpeg2000Headers h = Jpeg2000Headers.read(data, 0, data.length);
+        long[] a = {h.codestream.x0, h.codestream.y0, h.codestream.x1, h.codestream.y1};
+        if (!region.isEmpty()) { // jpxref's opj_set_decode_area arguments
+            String[] r = region.split(",");
+            for (int i = 0; i < 4; i++) a[i] = Long.parseLong(r[i]);
+        }
         Jpeg2000Decoder.Component[] out =
-                Jpeg2000Decoder.decodeImage(data, 0, data.length, Integer.parseInt(reduce)).components;
+                Jpeg2000Decoder.decodeImage(h, Integer.parseInt(reduce), a[0], a[1], a[2], a[3], null).components;
         int n = Integer.parseInt(comps);
         assertEquals(n, out.length, "components");
         for (int c = 0; c < n; c++) {

@@ -174,3 +174,49 @@ Oracle versions: OpenJPEG v2.5.4 (`6c4a29b0`, built locally), jai-imageio-jpeg20
   `CorpusAB.java` (local scratch).
 - **Meaning:** the J2K path is ready for the JP2 layer and the ImageIO reader. Performance has not
   been tuned yet: no parallel code-blocks, generic tier-1 loops.
+
+## D-15 Nothing after the codestream is read (2026-10-17)
+
+- **Observed:** `opj_end_decompress` runs the box reader again after the codestream's EOC, and a
+  malformed box there (mutant `trailing-bad-colr`: a `colr` header claiming 1 MiB) fails the whole
+  decode of an image that was already fully decoded.
+- **Decision:** the JP2 reader stops at the `jp2c` box header and hands the rest of the input to
+  the codestream reader, as OpenJPEG does on the way in; trailing boxes are never parsed. The
+  mutant is listed as a divergence in `Jp2MutantTest`. PDF streams often carry trailing padding or
+  junk, and nothing after the codestream changes the image.
+
+## D-16 cdef channel types travel with their channels (2026-10-17)
+
+- **Observed:** `opj_jp2_apply_cdef` swaps whole components (including `alpha`) to put colours in
+  association order, then sets `comps[cn].alpha = typ` with the colour's type. When the opacity
+  channel is not last (mutant `cdef-opacity-first`: channel 0 opacity, 1-3 colours 1-3) the samples
+  end in the right order, R G B A, but every component reports type 0: the opacity flag is lost.
+- **Decision:** the sample order is OpenJPEG's (checked against the oracle); each channel's
+  `channelType` is the type of its own first cdef entry, looked up by its original channel index.
+  OpenJPEG's `alpha` isn't in the PGX oracle, so this is checked by `channelTypesFollowCdef`
+  only. It matters for PDF `SMaskInData`, which needs to know which channel is opacity.
+
+## D-17 Signed palette values are sign-extended (2026-10-17)
+
+- **Observed:** `opj_jp2_read_pclr` reads each palette value as an unsigned integer of
+  ceil(B/8) bytes and never sign-extends it, so a 12-bit signed entry of -800 (stored FCE0)
+  decodes as 64736, outside the channel's range.
+- **Spec:** T.800 I.5.3.4: Bi gives the depth and signedness of the palette column; a signed
+  value is two's complement at that depth.
+- **Decision:** signed columns narrower than 32 bits are sign-extended from their declared
+  depth after the lookup. Unsigned values are left as OpenJPEG reads them. The PGX oracle keeps
+  only the low 16 bits, which are the same either way, so the mutant `pclr-wide-signed` matches
+  OpenJPEG and `signedPaletteColumnsAreSignExtended` checks the range. Measured: all 161
+  palettes in `~/dev/jpx-corpus` are 8-bit unsigned (Bi = 7), so real files are unaffected.
+
+## D-18 Corpus A/B on whole JP2 files: 3,742 of 3,744 bit-exact (2026-10-17)
+
+- **Measured:** every stream in `~/dev/jpx-corpus` decoded as a whole JP2 file by
+  `Jpeg2000Decoder.decodeImage` and by strict OpenJPEG (`jpxref`): 3,742 EXACT (samples, sizes,
+  precision and sign of every channel, after pclr/cmap/cdef), 0 differences, 0 one-sided
+  failures. Harness: `CorpusJp2AB.java` (local scratch, 16 files in parallel).
+- **Both fail:** two files whose `cmap` box is garbage (`0c7e1d2f…`: MTYP values 152/117/139;
+  `c049d851…`: CMP 59472 on a 1-component image). OpenJPEG's `opj_jp2_check_color` rejects
+  them and so do we. **Open:** in a PDF these may still be renderable as indices when the image
+  dictionary supplies an /Indexed ColorSpace; decide when the ImageIO reader exposes the raw
+  (pre-palette) components.

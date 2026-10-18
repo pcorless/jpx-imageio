@@ -1,0 +1,81 @@
+# name	outcome	components	sha1	what (libopenjp2 v2.5.4 via jpxref, strict build)
+ok-rgb	ok	3	096ee7ff83ba027aa512ff7226fc99cfd13b6c79	control
+jp-bad-magic	fail			signature magic
+jp-size-8	fail			signature box size
+ftyp-first	fail			ftyp before signature
+ftyp-missing	fail			no ftyp
+ftyp-twice	fail			second ftyp
+ftyp-odd-size	fail			ftyp compat list not x4
+ftyp-short	fail			ftyp < 8 bytes
+jp2h-missing	fail			no jp2h
+jp2c-before-jp2h	fail			codestream before header
+unknown-before-ftyp	fail			unknown box before ftyp
+unknown-between	ok	3	096ee7ff83ba027aa512ff7226fc99cfd13b6c79	unknown boxes skipped
+ihdr-missing	fail			jp2h without ihdr
+ihdr-twice	ok	3	096ee7ff83ba027aa512ff7226fc99cfd13b6c79	second ihdr ignored
+ihdr-size-13	fail			ihdr bad size
+ihdr-zero-comps	fail			ihdr nc 0
+ihdr-width-mismatch	fail			ihdr vs SIZ
+ihdr-comps-mismatch	ok	3	096ee7ff83ba027aa512ff7226fc99cfd13b6c79	ihdr nc vs SIZ (not checked by OpenJPEG)
+ihdr-c-not-7	ok	3	096ee7ff83ba027aa512ff7226fc99cfd13b6c79	compression type
+bpcc-ok	ok	3	096ee7ff83ba027aa512ff7226fc99cfd13b6c79	bpcc with BPC 255
+bpcc-bad-size	fail			bpcc size != nc
+bpcc-before-ihdr	fail			bpcc before ihdr
+colr-missing	ok	3	096ee7ff83ba027aa512ff7226fc99cfd13b6c79	no colr
+colr-short	fail			later colr < 3 bytes
+colr-meth1-short	fail			meth 1 < 7 bytes
+colr-meth3-then-gray	ok	3	096ee7ff83ba027aa512ff7226fc99cfd13b6c79	meth 3 ignored
+colr-two	ok	3	096ee7ff83ba027aa512ff7226fc99cfd13b6c79	second colr ignored
+colr-icc-empty	fail			empty ICC
+colr-cielab-35	ok	3	096ee7ff83ba027aa512ff7226fc99cfd13b6c79	CIELab params
+colr-misplaced-before	ok	3	096ee7ff83ba027aa512ff7226fc99cfd13b6c79	colr before jp2h ignored
+colr-misplaced-after	ok	3	096ee7ff83ba027aa512ff7226fc99cfd13b6c79	colr after jp2h (already have one)
+res-ok	ok	3	096ee7ff83ba027aa512ff7226fc99cfd13b6c79	res box
+res-garbage	ok	3	096ee7ff83ba027aa512ff7226fc99cfd13b6c79	malformed res
+jp2h-sub-overrun	fail			jp2h sub-box past end
+jp2h-trailing-4	fail			jp2h with 4 stray bytes
+jp2h-sub-zero	fail			jp2h sub-box length 0
+jp2h-xl	ok	3	096ee7ff83ba027aa512ff7226fc99cfd13b6c79	XL box length
+jp2h-xl-high	fail			XL box > 2^32
+jp2c-length-0	ok	3	096ee7ff83ba027aa512ff7226fc99cfd13b6c79	jp2c to end of file
+jp2c-length-short	ok	3	096ee7ff83ba027aa512ff7226fc99cfd13b6c79	jp2c length too small: ignored
+box-length-4	fail			box length < 8
+box-past-eof	fail			unknown box past EOF
+truncated-in-jp2h	fail			file ends in jp2h
+trailing-box-after-jp2c	ok	3	096ee7ff83ba027aa512ff7226fc99cfd13b6c79	box after the codestream
+trailing-bad-colr	fail			truncated known box after the codestream
+pclr-ok	ok	3	cf1aec0f92a16ea23fabe7ffb6a2cfa758884797	control
+pclr-without-cmap	ok	1	8e9088fdd3923e151a0becc748a5bb525693331d	pclr ignored
+cmap-without-pclr	fail			cmap needs pclr
+cmap-before-pclr	fail			cmap before pclr
+pclr-twice	fail			second pclr
+cmap-twice	fail			second cmap
+pclr-ne-0	fail			NE 0
+pclr-ne-1025	fail			NE 1025
+pclr-npc-0	fail			NPC 0
+pclr-truncated	fail			entries cut short
+pclr-index-clamped	ok	3	1b569bd295f33973b92a14630ec73ec0f83acfac	indices above NE-1 clamp
+pclr-wide-signed	ok	3	7126885394143bdbfd898882f2cce882dc5e7532	12-bit signed, 16 and 32-bit columns
+cmap-cmp-range	fail			cmp >= numcomps
+cmap-mtyp-2	fail			MTYP 2
+cmap-pcol-swap	fail			pcol != i
+cmap-pcol-range	fail			pcol >= NPC
+cmap-all-direct	ok	3	cf1aec0f92a16ea23fabe7ffb6a2cfa758884797	weird cmap corrected
+cmap-direct-pcol	fail			direct use with pcol 1
+cmap-mixed	ok	3	0b1fe26afce2e852d962160cfa72c9b4f046e161	direct + palette
+cmap-short	fail			cmap too short
+pclr-misplaced-after	ok	3	cf1aec0f92a16ea23fabe7ffb6a2cfa758884797	pclr+cmap after jp2h are applied
+cdef-ok	ok	4	803c44b15f6a740cebaa9ca30591ee51e0856ec6	control
+cdef-swap	ok	4	57d0b7c1b9826098e46d1305482aac33541db764	colour order 3,2,1
+cdef-opacity-first	ok	4	57b904f8a6abd345b3c337c191beee45795218c6	alpha in channel 0
+cdef-premultiplied	ok	4	803c44b15f6a740cebaa9ca30591ee51e0856ec6	premultiplied
+cdef-unspecified	ok	4	803c44b15f6a740cebaa9ca30591ee51e0856ec6	unspecified
+cdef-incomplete	fail			channel 2 missing
+cdef-cn-range	fail			cn 4
+cdef-asoc-range	fail			asoc 9
+cdef-duplicate	ok	4	803c44b15f6a740cebaa9ca30591ee51e0856ec6	cn 0 twice
+cdef-n-0	fail			N 0
+cdef-short	fail			cdef too short
+cdef-twice	fail			second cdef
+pclr-cdef	ok	3	e9a69fad3336ef6faa1e9fccd79cf31c3f229499	cdef on cmap channels
+pclr-cdef-range	fail			cdef channel past NPC

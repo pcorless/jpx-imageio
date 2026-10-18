@@ -42,17 +42,18 @@ public class Jpeg2000DecoderTest {
         }
     }
 
-    /** references.tsv rows for .j2k fixtures: name, file, tag, components, reduce, region. */
+    /** references.tsv rows: name, file, tag, components, reduce, region, kind. */
     static List<String[]> references() {
         List<String[]> out = new ArrayList<>();
         for (String line : new String(fixture("references.tsv"), StandardCharsets.US_ASCII).split("\n")) {
             if (line.startsWith("#") || line.isEmpty()) continue;
             String[] f = line.split("\t", -1);
-            if (f[1].endsWith(".j2k") && f[5].isEmpty()) out.add(f); // regions: not implemented yet
+            if (f[5].isEmpty()) out.add(f); // regions: not implemented yet
         }
         return out;
     }
 
+    /** dims: width, height, precision, signed (0/1). */
     static int[] pgx(byte[] b, int[] dims) {
         int nl = 0;
         while (b[nl] != '\n') nl++;
@@ -61,6 +62,10 @@ public class Jpeg2000DecoderTest {
         int prec = Integer.parseInt(h[3]);
         dims[0] = Integer.parseInt(h[4]);
         dims[1] = Integer.parseInt(h[5]);
+        if (dims.length > 3) {
+            dims[2] = prec;
+            dims[3] = signed ? 1 : 0;
+        }
         int n = prec <= 8 ? 1 : prec <= 16 ? 2 : 4;
         int[] s = new int[dims[0] * dims[1]];
         int p = nl + 1;
@@ -79,13 +84,16 @@ public class Jpeg2000DecoderTest {
     public void matchesOpenJpeg(String name, String file, String tag, String comps, String reduce, String region, String kind)
             throws JpxException {
         byte[] data = fixture(file);
-        Jpeg2000Decoder.Component[] out = Jpeg2000Decoder.decode(data, 0, data.length, Integer.parseInt(reduce));
+        Jpeg2000Decoder.Component[] out =
+                Jpeg2000Decoder.decodeImage(data, 0, data.length, Integer.parseInt(reduce)).components;
         int n = Integer.parseInt(comps);
         assertEquals(n, out.length, "components");
         for (int c = 0; c < n; c++) {
-            int[] dims = new int[2];
+            int[] dims = new int[4];
             int[] want = pgx(fixture("ref/" + name + "." + tag + "." + c + ".pgx"), dims);
             assertEquals(dims[0] + "x" + dims[1], out[c].width + "x" + out[c].height, "component " + c + " size");
+            assertEquals(dims[2] + (dims[3] == 1 ? "s" : "u"), out[c].precision + (out[c].signed ? "s" : "u"),
+                    "component " + c + " precision");
             int bad = 0, first = -1;
             long max = 0;
             for (int i = 0; i < want.length; i++) {

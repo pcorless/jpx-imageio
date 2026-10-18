@@ -17,7 +17,9 @@
  *   the component geometry of opj_j2k_update_image_dimensions (ceildiv by dx/dy, then
  *   ceildivpow2 by the reduce factor) and the tile copy of opj_j2k_update_image_data.
  *   Changed: tiles are decoded one after another into whole-image component arrays; no
- *   decode-area window yet.
+ *   decode-area window yet. decodeImage is ORIGINAL glue: format sniffing as jpxref.c, the
+ *   IHDR/SIZ size check and BPC warning of opj_j2k_read_siz, then opj_jp2_decode's
+ *   post-processing (Jp2Channels).
  */
 /*
  * The copyright in this software is being made available under the 2-clauses
@@ -65,8 +67,14 @@ package org.icepdf.jpx;
 
 import org.icepdf.jpx.codestream.Codestream;
 import org.icepdf.jpx.codestream.CodestreamReader;
+import org.icepdf.jpx.jp2.Jp2Channels;
+import org.icepdf.jpx.jp2.Jp2Header;
+import org.icepdf.jpx.jp2.Jp2Reader;
 import org.icepdf.jpx.tile.TileDecoder;
 import org.icepdf.jpx.tile.TileDecoder.DecodedComponent;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /** Decodes a JPEG 2000 codestream (J2K) to its components' samples. */
 public final class Jpeg2000Decoder {
@@ -78,13 +86,27 @@ public final class Jpeg2000Decoder {
         public final int precision;
         public final boolean signed;
         public final int[] samples;
+        /**
+         * The JP2 cdef channel type (0 colour, 1 opacity, 2 premultiplied opacity, 65535
+         * unspecified); 0 when there is no cdef box, as OpenJPEG's opj_image_comp_t.alpha.
+         */
+        public final int channelType;
 
-        Component(int width, int height, int precision, boolean signed, int[] samples) {
+        public Component(int width, int height, int precision, boolean signed, int[] samples) {
+            this(width, height, precision, signed, samples, 0);
+        }
+
+        public Component(int width, int height, int precision, boolean signed, int[] samples, int channelType) {
             this.width = width;
             this.height = height;
             this.precision = precision;
             this.signed = signed;
             this.samples = samples;
+            this.channelType = channelType;
+        }
+
+        public Component withChannelType(int type) {
+            return type == channelType ? this : new Component(width, height, precision, signed, samples, type);
         }
     }
 
@@ -97,6 +119,40 @@ public final class Jpeg2000Decoder {
 
     static int ceilDivPow2(long a, int b) {
         return (int) ((a + (1L << b) - 1) >> b);
+    }
+
+    /**
+     * Decodes a JP2 file or a bare codestream, chosen as OpenJPEG's jpxref sniffs it: a codestream
+     * starts FF 4F, anything else is read as JP2. JP2 palettes and channel definitions are applied
+     * as opj_decode applies them.
+     */
+    public static Jpeg2000Image decodeImage(byte[] data, int offset, int length, int reduce) throws JpxException {
+        if (length >= 2 && (data[offset] & 0xff) == 0xff && (data[offset + 1] & 0xff) == 0x4f) {
+            Codestream cs = CodestreamReader.read(data, offset, length);
+            return new Jpeg2000Image(decode(cs, reduce), null, cs.warnings());
+        }
+        Jp2Header h = Jp2Reader.read(data, offset, length);
+        Codestream cs = CodestreamReader.read(data, h.codestreamOffset, h.codestreamLength);
+        // opj_j2k_read_siz
+        long sizW = (long) cs.x1 - cs.x0, sizH = (long) cs.y1 - cs.y0;
+        if (h.width != sizW || h.height != sizH) {
+            throw new JpxException("Error with SIZ marker: IHDR w(" + h.width + ") h(" + h.height + ") vs. SIZ w("
+                    + sizW + ") h(" + sizH + ")");
+        }
+        List<String> warnings = new ArrayList<>(h.warnings());
+        if (h.bitsPerComponent != 255) {
+            for (int c = 1; c < cs.components.length; c++) {
+                if (cs.components[c].precision != cs.components[0].precision
+                        || cs.components[c].signed != cs.components[0].signed) {
+                    warnings.add("Despite JP2 BPC!=255, precision and/or sgnd values for comp[" + c
+                            + "] is different than comp[0]");
+                }
+            }
+        }
+        Component[] comps = decode(cs, reduce);
+        warnings.addAll(cs.warnings());
+        comps = Jp2Channels.apply(h, comps, warnings);
+        return new Jpeg2000Image(comps, h, warnings);
     }
 
     /** Decodes the codestream in {@code data[offset, offset + length)} with {@code reduce} levels discarded. */

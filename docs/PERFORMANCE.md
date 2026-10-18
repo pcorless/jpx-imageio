@@ -23,10 +23,11 @@ How fast icepdf-jpx decodes, against what, and where its time goes. Tools: `tool
 | icepdf-jpx | 175.8 s | 24.2 | 19.3 | 27.2 | 19.7 | 28.3 |
 | OpenJPEG strict `-O2` | 138.5 s | 30.7 | 24.8 | 34.6 | 25.8 | 34.8 |
 | OpenJPEG Release `-O3 -ffast-math` | 114.2 s | 37.2 | 29.9 | 43.9 | 30.4 | 43.0 |
-| JJ2000 1.4.0 (first 833 files) | | 2.6 | | | | |
+| JJ2000 1.4.0 (3,732 files both decode) | 1,618 s | 2.6 | | | | |
 
-icepdf-jpx ran at 0.79x strict OpenJPEG and 0.65x its stock build, about 10x faster than
-JJ2000 (which also timed out, at 20 s, on 4 of those 833 files).
+icepdf-jpx ran at 0.79x strict OpenJPEG and 0.65x its stock build, and 9.6x faster than
+JJ2000 on the 3,732 files both decode (169 s against 1,618 s). JJ2000 also timed out, at 20 s
+each, on 10 files.
 
 ## Where the time goes
 

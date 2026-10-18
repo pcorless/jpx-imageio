@@ -257,6 +257,8 @@ public class ImageReaderContractTest {
     public void listeners() throws Exception {
         withReader(TILED, r -> {
             AtomicInteger started = new AtomicInteger(), completed = new AtomicInteger(), progress = new AtomicInteger();
+            float[] last = {-1};
+            boolean[] monotonic = {true};
             r.addIIOReadProgressListener(new Progress() {
                 @Override
                 public void imageStarted(ImageReader source, int imageIndex) {
@@ -266,6 +268,8 @@ public class ImageReaderContractTest {
                 @Override
                 public void imageProgress(ImageReader source, float percentageDone) {
                     progress.incrementAndGet();
+                    monotonic[0] &= percentageDone >= last[0];
+                    last[0] = percentageDone;
                 }
 
                 @Override
@@ -275,7 +279,10 @@ public class ImageReaderContractTest {
             });
             r.read(0);
             assertEquals("1/1", started.get() + "/" + completed.get());
-            assertEquals(12, progress.get(), "one progress report per tile (4x3)");
+            // reported on the calling thread as tiles finish: with helper threads, fewer reports
+            assertTrue(progress.get() >= 1, "progress reported");
+            assertTrue(monotonic[0], "progress never goes back");
+            assertEquals(100f, last[0], "progress ends at 100%");
         });
         withReader(TILED, r -> {
             AtomicInteger aborted = new AtomicInteger(), completed = new AtomicInteger();

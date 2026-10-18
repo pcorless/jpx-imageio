@@ -67,6 +67,9 @@
  */
 package org.icepdf.jpx.transform;
 
+import org.icepdf.jpx.Jpeg2000Threads;
+import org.icepdf.jpx.JpxException;
+import org.icepdf.jpx.internal.Parallel;
 import org.icepdf.jpx.tile.TileLayout.Resolution;
 
 /** Inverse discrete wavelet transforms over a tile-component, in place. */
@@ -96,29 +99,75 @@ public final class InverseDwt {
 
     /** opj_dwt_decode (whole tile): {@code numRes} resolutions of {@code a}, row stride {@code w}. */
     public static void decode53(int[] a, int w, Resolution[] res, int numRes) {
+        try {
+            decode53(a, w, res, numRes, Jpeg2000Threads.NONE);
+        } catch (JpxException e) {
+            throw new IllegalStateException(e); // the passes themselves never throw
+        }
+    }
+
+    /** As decode53, with each level's row strips and column blocks spread over {@code threads}. */
+    public static void decode53(int[] a, int w, Resolution[] res, int numRes, Jpeg2000Threads threads)
+            throws JpxException {
         if (numRes <= 1 || w == 0) return;
         int[] mem = new int[maxResolutionSize(res, numRes)];
         int rw = res[0].width(), rh = res[0].height();
         for (int r = 1; r < numRes; r++) {
             int hsn = rw, vsn = rh;
-            rw = res[r].width();
-            rh = res[r].height();
+            int lw = res[r].width(), lh = res[r].height();
+            rw = lw;
+            rh = lh;
             int hdn = rw - hsn;
             int hcas = res[r].x0 % 2;
-            for (int j = 0; j < rh; j++) {
-                int row = j * w;
-                interleave(a, row, 1, mem, hsn, hdn, hcas);
-                decode1(mem, hdn, hsn, hcas);
-                System.arraycopy(mem, 0, a, row, rw);
-            }
             int vdn = rh - vsn;
             int vcas = res[r].y0 % 2;
-            for (int i = 0; i < rw; i++) {
-                interleave(a, i, w, mem, vsn, vdn, vcas);
-                decode1(mem, vdn, vsn, vcas);
-                for (int k = 0; k < rh; k++) a[i + k * w] = mem[k];
+            if (parallel(threads, rw, rh)) {
+                Parallel.forEach(threads, items(rh, ROWS_PER_ITEM), () -> {
+                    int[] m = new int[lw];
+                    return item -> {
+                        for (int j = item * ROWS_PER_ITEM, e = Math.min(lh, j + ROWS_PER_ITEM); j < e; j++) {
+                            row53(a, j * w, m, hsn, hdn, hcas, lw);
+                        }
+                    };
+                });
+                Parallel.forEach(threads, items(rw, COLUMNS_PER_ITEM), () -> {
+                    int[] m = new int[lh];
+                    return item -> {
+                        for (int i = item * COLUMNS_PER_ITEM, e = Math.min(lw, i + COLUMNS_PER_ITEM); i < e; i++) {
+                            column53(a, i, w, m, vsn, vdn, vcas, lh);
+                        }
+                    };
+                });
+                continue;
             }
+            for (int j = 0; j < rh; j++) row53(a, j * w, mem, hsn, hdn, hcas, rw);
+            for (int i = 0; i < rw; i++) column53(a, i, w, mem, vsn, vdn, vcas, rh);
         }
+    }
+
+    private static void row53(int[] a, int row, int[] mem, int sn, int dn, int cas, int rw) {
+        interleave(a, row, 1, mem, sn, dn, cas);
+        decode1(mem, dn, sn, cas);
+        System.arraycopy(mem, 0, a, row, rw);
+    }
+
+    private static void column53(int[] a, int i, int w, int[] mem, int sn, int dn, int cas, int rh) {
+        interleave(a, i, w, mem, sn, dn, cas);
+        decode1(mem, dn, sn, cas);
+        for (int k = 0; k < rh; k++) a[i + k * w] = mem[k];
+    }
+
+    /** Rows of a horizontal pass, and columns of a vertical one, per work item. */
+    static final int ROWS_PER_ITEM = 16, COLUMNS_PER_ITEM = 64;
+    /** Smallest level (width x height) worth spreading over threads. */
+    static final int PARALLEL_MIN_AREA = 128 * 128;
+
+    private static boolean parallel(Jpeg2000Threads threads, int rw, int rh) {
+        return Parallel.worthIt(threads, (long) rw * rh >= PARALLEL_MIN_AREA);
+    }
+
+    private static int items(int n, int per) {
+        return (n + per - 1) / per;
     }
 
     /** opj_dwt_interleave_h / _v: lows to cas + 2i, highs to 1 - cas + 2i. */
@@ -167,32 +216,64 @@ public final class InverseDwt {
 
     /** opj_dwt_decode_tile_97 (whole tile), in place on float coefficients. */
     public static void decode97(float[] a, int w, Resolution[] res, int numRes) {
+        try {
+            decode97(a, w, res, numRes, Jpeg2000Threads.NONE);
+        } catch (JpxException e) {
+            throw new IllegalStateException(e); // the passes themselves never throw
+        }
+    }
+
+    /** As decode97, with each level's row strips and column blocks spread over {@code threads}. */
+    public static void decode97(float[] a, int w, Resolution[] res, int numRes, Jpeg2000Threads threads)
+            throws JpxException {
         if (numRes <= 1 || w == 0) return;
         float[] wav = new float[maxResolutionSize(res, numRes) + 1];
         float[] lanes = new float[(maxResolutionSize(res, numRes) + 1) * LANES];
         int rw = res[0].width(), rh = res[0].height();
         for (int r = 1; r < numRes; r++) {
             int hsn = rw, vsn = rh;
-            rw = res[r].width();
-            rh = res[r].height();
+            int lw = res[r].width(), lh = res[r].height();
+            rw = lw;
+            rh = lh;
             int hdn = rw - hsn;
             int hcas = res[r].x0 % 2;
-            for (int j = 0; j < rh; j++) {
-                int row = j * w;
-                interleave(a, row, 1, wav, hsn, hdn, hcas);
-                decode1(wav, hsn, hdn, hcas);
-                System.arraycopy(wav, 0, a, row, rw);
-            }
             int vdn = rh - vsn;
             int vcas = res[r].y0 % 2;
-            // opj_v8dwt: LANES columns at a time, so each row is read and written contiguously
-            for (int i = 0; i < rw; i += LANES) {
-                int nl = Math.min(LANES, rw - i);
-                interleaveV(a, i, w, lanes, vsn, vdn, vcas, nl);
-                decodeLanes(lanes, vsn, vdn, vcas, nl);
-                for (int k = 0, o = i; k < rh; k++, o += w) System.arraycopy(lanes, k * LANES, a, o, nl);
+            if (parallel(threads, rw, rh)) {
+                Parallel.forEach(threads, items(rh, ROWS_PER_ITEM), () -> {
+                    float[] wv = new float[lw + 1];
+                    return item -> {
+                        for (int j = item * ROWS_PER_ITEM, e = Math.min(lh, j + ROWS_PER_ITEM); j < e; j++) {
+                            row97(a, j * w, wv, hsn, hdn, hcas, lw);
+                        }
+                    };
+                });
+                Parallel.forEach(threads, items(rw, COLUMNS_PER_ITEM), () -> {
+                    float[] ln = new float[(lh + 1) * LANES];
+                    return item -> {
+                        for (int i = item * COLUMNS_PER_ITEM, e = Math.min(lw, i + COLUMNS_PER_ITEM); i < e; i += LANES) {
+                            columns97(a, i, w, ln, vsn, vdn, vcas, Math.min(LANES, e - i), lh);
+                        }
+                    };
+                });
+                continue;
             }
+            for (int j = 0; j < rh; j++) row97(a, j * w, wav, hsn, hdn, hcas, rw);
+            // opj_v8dwt: LANES columns at a time, so each row is read and written contiguously
+            for (int i = 0; i < rw; i += LANES) columns97(a, i, w, lanes, vsn, vdn, vcas, Math.min(LANES, rw - i), rh);
         }
+    }
+
+    private static void row97(float[] a, int row, float[] wav, int sn, int dn, int cas, int rw) {
+        interleave(a, row, 1, wav, sn, dn, cas);
+        decode1(wav, sn, dn, cas);
+        System.arraycopy(wav, 0, a, row, rw);
+    }
+
+    private static void columns97(float[] a, int i, int w, float[] lanes, int sn, int dn, int cas, int nl, int rh) {
+        interleaveV(a, i, w, lanes, sn, dn, cas, nl);
+        decodeLanes(lanes, sn, dn, cas, nl);
+        for (int k = 0, o = i; k < rh; k++, o += w) System.arraycopy(lanes, k * LANES, a, o, nl);
     }
 
     /** Columns per vertical pass: opj_v8dwt's 8, doubled (no SIMD lanes to match in Java). */

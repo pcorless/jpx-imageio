@@ -67,6 +67,7 @@ package org.icepdf.jpx;
 
 import org.icepdf.jpx.codestream.Codestream;
 import org.icepdf.jpx.codestream.CodestreamReader;
+import org.icepdf.jpx.internal.Parallel;
 import org.icepdf.jpx.jp2.Jp2Channels;
 import org.icepdf.jpx.tile.TileDecoder;
 import org.icepdf.jpx.tile.TileDecoder.DecodedComponent;
@@ -125,17 +126,55 @@ public final class Jpeg2000Decoder {
      * as opj_decode applies them.
      */
     public static Jpeg2000Image decodeImage(byte[] data, int offset, int length, int reduce) throws JpxException {
-        Jpeg2000Headers h = Jpeg2000Headers.read(data, offset, length);
-        Codestream cs = h.codestream;
-        return decodeImage(h, reduce, cs.x0, cs.y0, cs.x1, cs.y1, null);
+        return decodeImage(Jpeg2000Headers.read(data, offset, length), new Options().reduce(reduce));
     }
 
-    /** Decodes an area of the reference grid (see {@link #decode(Codestream, int, long, long, long, long, Progress)}). */
+    /** Decodes an area of the reference grid on the calling thread only (see {@link Options}). */
     public static Jpeg2000Image decodeImage(Jpeg2000Headers h, int reduce, long ax0, long ay0, long ax1, long ay1,
                                             Progress progress) throws JpxException {
+        return decodeImage(h, new Options().reduce(reduce).area(ax0, ay0, ax1, ay1).progress(progress)
+                .threads(Jpeg2000Threads.NONE));
+    }
+
+    /** How to decode: resolution levels discarded, area, progress hook, threads. Not thread-safe. */
+    public static final class Options {
+        int reduce;
+        long[] area;
+        Progress progress;
+        Jpeg2000Threads threads;
+
+        /** Discard {@code reduce} resolution levels (each halves the size). */
+        public Options reduce(int reduce) {
+            if (reduce < 0) throw new IllegalArgumentException("reduce " + reduce);
+            this.reduce = reduce;
+            return this;
+        }
+
+        /** Decode only {@code [x0, x1) x [y0, y1)} of the reference grid; the whole image by default. */
+        public Options area(long x0, long y0, long x1, long y1) {
+            this.area = new long[]{x0, y0, x1, y1};
+            return this;
+        }
+
+        public Options progress(Progress progress) {
+            this.progress = progress;
+            return this;
+        }
+
+        /** Threads to use; {@link Jpeg2000Threads#defaults()} when not set. */
+        public Options threads(Jpeg2000Threads threads) {
+            this.threads = threads;
+            return this;
+        }
+    }
+
+    public static Jpeg2000Image decodeImage(Jpeg2000Headers h, Options o) throws JpxException {
+        Codestream cs = h.codestream;
+        long[] a = o.area != null ? o.area : new long[]{cs.x0, cs.y0, cs.x1, cs.y1};
+        Jpeg2000Threads threads = o.threads != null ? o.threads : Jpeg2000Threads.defaults();
         List<String> warnings = new ArrayList<>(h.warnings());
-        Component[] comps = decode(h.codestream, reduce, ax0, ay0, ax1, ay1, progress);
-        warnings.addAll(h.codestream.warnings());
+        Component[] comps = decode(cs, o.reduce, a[0], a[1], a[2], a[3], o.progress, threads);
+        warnings.addAll(cs.warnings());
         if (h.jp2 != null) comps = Jp2Channels.apply(h.jp2, comps, warnings);
         return new Jpeg2000Image(comps, h.jp2, warnings);
     }
@@ -145,13 +184,16 @@ public final class Jpeg2000Decoder {
         return decode(CodestreamReader.read(data, offset, length), reduce);
     }
 
-    /** Called after each tile; return false to stop (the components keep what was decoded). */
+    /**
+     * Called on the decoding (calling) thread as tiles finish, with the count done so far;
+     * return false to stop (the components keep what was decoded).
+     */
     public interface Progress {
         boolean tileDone(int done, int total);
     }
 
     public static Component[] decode(Codestream cs, int reduce) throws JpxException {
-        return decode(cs, reduce, cs.x0, cs.y0, cs.x1, cs.y1, null);
+        return decode(cs, reduce, cs.x0, cs.y0, cs.x1, cs.y1, null, Jpeg2000Threads.NONE);
     }
 
     /**
@@ -163,6 +205,12 @@ public final class Jpeg2000Decoder {
      */
     public static Component[] decode(Codestream cs, int reduce, long ax0, long ay0, long ax1, long ay1,
                                      Progress progress) throws JpxException {
+        return decode(cs, reduce, ax0, ay0, ax1, ay1, progress, Jpeg2000Threads.NONE);
+    }
+
+    /** As {@link #decode(Codestream, int, long, long, long, long, Progress)}, using {@code threads}. */
+    public static Component[] decode(Codestream cs, int reduce, long ax0, long ay0, long ax1, long ay1,
+                                     Progress progress, Jpeg2000Threads threads) throws JpxException {
         // opj_j2k_set_decode_area: clip to the image
         int x0 = (int) Math.max(ax0, cs.x0), y0 = (int) Math.max(ay0, cs.y0);
         int x1 = (int) Math.min(ax1, cs.x1), y1 = (int) Math.min(ay1, cs.y1);
@@ -190,20 +238,23 @@ public final class Jpeg2000Decoder {
         int q0 = (int) Math.max(0, ((long) y0 - cs.tileY0) / cs.tileHeight);
         int p1 = Math.min(cs.tilesX, ceilDiv((long) x1 - cs.tileX0, cs.tileWidth));
         int q1 = Math.min(cs.tilesY, ceilDiv((long) y1 - cs.tileY0, cs.tileHeight));
-        int total = (p1 - p0) * (q1 - q0), done = 0;
-        TileDecoder decoder = new TileDecoder();
-        for (int q = q0; q < q1; q++) {
-            for (int p = p0; p < p1; p++) {
-                int t = q * cs.tilesX + p;
+        int tw = p1 - p0, total = tw * (q1 - q0);
+        // several tiles: one tile per work item, each decoded serially; one tile: the threads go
+        // to its code-blocks and transforms instead
+        boolean tiles = total > 1;
+        Jpeg2000Threads inner = tiles ? Jpeg2000Threads.NONE : threads;
+        Parallel.forEach(tiles ? threads : Jpeg2000Threads.NONE, total, () -> {
+            TileDecoder decoder = new TileDecoder();
+            return item -> {
+                int t = (q0 + item / tw) * cs.tilesX + p0 + item % tw;
                 if (cs.tile(t) == null) {
                     cs.warningsSink("tile " + t + " has no tile-parts; left empty");
-                } else {
-                    DecodedComponent[] tile = decoder.decode(cs, t, reduce);
-                    for (int c = 0; c < nc; c++) copy(tile[c], samples[c], cx0[c], cy0[c], cw[c], ch[c]);
+                    return;
                 }
-                if (progress != null && !progress.tileDone(++done, total)) return result(cs, cw, ch, samples);
-            }
-        }
+                DecodedComponent[] tile = decoder.decode(cs, t, reduce, inner);
+                for (int c = 0; c < nc; c++) copy(tile[c], samples[c], cx0[c], cy0[c], cw[c], ch[c]);
+            };
+        }, progress == null ? null : done -> progress.tileDone(done, total));
         return result(cs, cw, ch, samples);
     }
 

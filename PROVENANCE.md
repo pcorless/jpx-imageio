@@ -39,7 +39,10 @@ JJ2000 / jai-imageio-jpeg2000 is a black-box oracle only; its source is never co
 | `src/main/java/org/icepdf/jpx/jp2/Jp2Header.java` | ADAPTED + SPEC | OpenJPEG `jp2.h` @ 6c4a29b0: decoder fields of `opj_jp2_t`, `opj_jp2_color_t`, `opj_jp2_pclr_t`, `opj_jp2_cmap_comp_t`, `opj_jp2_cdef_info_t`, box constants; T.800 I.5.3.7 (res) | BSD-2 | keeps every colr box; res fields |
 | `src/main/java/org/icepdf/jpx/jp2/Jp2Reader.java` | ADAPTED + SPEC | OpenJPEG `jp2.c` @ 6c4a29b0: `opj_jp2_read_header_procedure`, `read_boxhdr`, `read_boxhdr_char`, `read_jp`, `read_ftyp`, `read_jp2h`, `read_ihdr`, `read_bpcc`, `read_colr`, `read_pclr`, `read_cmap`, `read_cdef`, checks of `opj_jp2_read_header`; T.800 I.5.3.7 (res) | BSD-2 | byte range not stream; later colr boxes kept, never fatal; res read leniently |
 | `src/main/java/org/icepdf/jpx/jp2/Jp2Channels.java` | PORTED | OpenJPEG `jp2.c` @ 6c4a29b0: `opj_jp2_apply_color_postprocessing`, `opj_jp2_check_color`, `opj_jp2_apply_pclr`, `opj_jp2_apply_cdef` | BSD-2 | works on copies; cdef type → `Component.channelType` |
+| `src/main/java/org/icepdf/jpx/Jpeg2000Threads.java` | ORIGINAL | | Apache-2.0 | thread settings, default pool |
+| `src/main/java/org/icepdf/jpx/internal/Parallel.java` | ORIGINAL | | Apache-2.0 | caller-helps parallel loops |
 | `src/main/java/org/icepdf/jpx/imageio/Jpeg2000ImageReaderSpi.java` | ORIGINAL | (javax.imageio SPI contract; T.800 A.4.1, I.5.1 signatures) | Apache-2.0 | |
+| `src/main/java/org/icepdf/jpx/imageio/Jpeg2000ImageReadParam.java` | ORIGINAL | | Apache-2.0 | threads per read |
 | `src/main/java/org/icepdf/jpx/imageio/Jpeg2000ImageReader.java` | ORIGINAL | (javax.imageio ImageReader contract) | Apache-2.0 | |
 | `src/main/java/org/icepdf/jpx/imageio/Jpeg2000Layout.java` | ORIGINAL | (T.800 I.5.3.3, I.5.3.6) | Apache-2.0 | colour-space guesses: D-19 |
 | `src/main/java/org/icepdf/jpx/imageio/Jpeg2000ColorSpaces.java` | ORIGINAL | | Apache-2.0 | uncalibrated CMYK and n-channel spaces |

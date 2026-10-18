@@ -66,7 +66,12 @@ public final class InverseMct {
 
     /** opj_mct_decode: inverse reversible component transform (RCT). */
     public static void decodeReversible(int[] c0, int[] c1, int[] c2, int n) {
-        for (int i = 0; i < n; ++i) {
+        decodeReversible(c0, c1, c2, 0, n);
+    }
+
+    /** decodeReversible over samples [from, to). */
+    public static void decodeReversible(int[] c0, int[] c1, int[] c2, int from, int to) {
+        for (int i = from; i < to; ++i) {
             int y = c0[i];
             int u = c1[i];
             int v = c2[i];

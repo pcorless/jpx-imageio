@@ -21,6 +21,7 @@ package org.icepdf.jpx.imageio;
 import org.icepdf.jpx.Jpeg2000Decoder;
 import org.icepdf.jpx.Jpeg2000Headers;
 import org.icepdf.jpx.Jpeg2000Image;
+import org.icepdf.jpx.Jpeg2000Threads;
 import org.icepdf.jpx.codestream.Codestream;
 
 import javax.imageio.IIOException;
@@ -52,6 +53,8 @@ import java.util.List;
  * <li>Samples keep their depth (1-8 bits in bytes, 9-16 in shorts, more in ints); signed channels
  * are level-shifted by 2^(precision-1) into unsigned bands. Subsampled components are upsampled
  * (nearest neighbour) to the image grid.</li>
+ * <li>Decodes use {@link Jpeg2000Threads#defaults()} unless a {@link Jpeg2000ImageReadParam}
+ * says otherwise; the progress listener and abort are served on the calling thread.</li>
  * <li>Source subsampling by a power of two is met by discarding resolution levels, so it costs
  * less than a full decode; the rest is point-sampled. A source region decodes only the tiles it
  * meets.</li>
@@ -152,6 +155,12 @@ public final class Jpeg2000ImageReader extends ImageReader {
     public IIOMetadata getImageMetadata(int imageIndex) throws IOException {
         check(imageIndex);
         return new Jpeg2000Metadata(headers, layout);
+    }
+
+    /** A {@link Jpeg2000ImageReadParam}, so callers can choose the decode's threads. */
+    @Override
+    public ImageReadParam getDefaultReadParam() {
+        return new Jpeg2000ImageReadParam();
     }
 
     // tiles -------------------------------------------------------------------------------------
@@ -310,10 +319,14 @@ public final class Jpeg2000ImageReader extends ImageReader {
         Codestream cs = headers.codestream;
         long ax0 = (long) cs.x0 + src.x, ay0 = (long) cs.y0 + src.y;
         long ax1 = ax0 + src.width, ay1 = ay0 + src.height;
-        Jpeg2000Image image = Jpeg2000Decoder.decodeImage(headers, reduce, ax0, ay0, ax1, ay1, (done, total) -> {
-            processImageProgress(100f * done / total);
-            return !abortRequested();
-        });
+        Jpeg2000Threads threads = param instanceof Jpeg2000ImageReadParam
+                ? ((Jpeg2000ImageReadParam) param).getThreads() : null;
+        Jpeg2000Image image = Jpeg2000Decoder.decodeImage(headers, new Jpeg2000Decoder.Options()
+                .reduce(reduce).area(ax0, ay0, ax1, ay1).threads(threads)
+                .progress((done, total) -> {
+                    processImageProgress(100f * done / total);
+                    return !abortRequested();
+                }));
         List<String> warnings = image.warnings();
         for (int i = headers.warnings().size(); i < warnings.size(); i++) processWarningOccurred(warnings.get(i));
         // the area on the reduced grid of an unsubsampled component

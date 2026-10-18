@@ -107,9 +107,11 @@
  */
 package org.icepdf.jpx.tile;
 
+import org.icepdf.jpx.Jpeg2000Threads;
 import org.icepdf.jpx.JpxException;
 import org.icepdf.jpx.codestream.Codestream;
 import org.icepdf.jpx.codestream.Codestream.ComponentCoding;
+import org.icepdf.jpx.internal.Parallel;
 import org.icepdf.jpx.tier1.CodeBlockDecoder;
 import org.icepdf.jpx.tier2.PacketDecoder;
 import org.icepdf.jpx.tier2.PacketIterator;
@@ -120,6 +122,9 @@ import org.icepdf.jpx.tile.TileLayout.Resolution;
 import org.icepdf.jpx.transform.InverseDwt;
 import org.icepdf.jpx.transform.InverseMct;
 
+
+import java.util.ArrayList;
+import java.util.List;
 /** Decodes one tile to reconstructed component samples. */
 public final class TileDecoder {
 
@@ -146,13 +151,20 @@ public final class TileDecoder {
         }
     }
 
-    private final CodeBlockDecoder t1 = new CodeBlockDecoder();
-    private byte[] concat = new byte[0];
-    private int[] segLength = new int[16];
-    private int[] segPasses = new int[16];
+    /** Work-list size below which a tile's code-blocks are decoded on the calling thread only. */
+    static final int PARALLEL_MIN_BLOCKS = 8;
+
+    /** Scratch for decoding code-blocks; one per thread. */
+    private final BlockWorker serial = new BlockWorker();
 
     /** opj_tcd_decode_tile. */
     public DecodedComponent[] decode(Codestream cs, int tileIndex, int reduce) throws JpxException {
+        return decode(cs, tileIndex, reduce, Jpeg2000Threads.NONE);
+    }
+
+    /** Decodes one tile; {@code threads} may be used for its code-blocks and transforms. */
+    public DecodedComponent[] decode(Codestream cs, int tileIndex, int reduce, Jpeg2000Threads threads)
+            throws JpxException {
         TileLayout tile = TileLayout.build(cs, tileIndex, reduce);
         PacketIterator pi = PacketIterator.of(cs, tile);
         PacketDecoder.decode(cs, tile, pi);
@@ -160,35 +172,55 @@ public final class TileDecoder {
         int[][] ints = new int[nc][];
         float[][] floats = new float[nc][];
         for (int c = 0; c < nc; c++) {
-            TileLayout.Component tc = tile.components[c];
-            ComponentCoding tccp = tile.coding.components[c];
-            Resolution top = tc.top();
-            int w = top.width(), h = top.height();
-            long size = (long) w * h;
+            Resolution top = tile.components[c].top();
+            long size = (long) top.width() * top.height();
             if (size > Integer.MAX_VALUE - 8) throw JpxException.unsupported("tile-component of " + size + " samples");
-            if (tccp.transform == 1) ints[c] = new int[(int) size];
+            if (tile.coding.components[c].transform == 1) ints[c] = new int[(int) size];
             else floats[c] = new float[(int) size];
-            decodeCodeBlocks(tc, tccp, w, ints[c], floats[c]);
+        }
+        decodeCodeBlocks(tile, ints, floats, threads);
+        for (int c = 0; c < nc; c++) {
             // opj_tcd_dwt_decode
-            if (tccp.transform == 1) {
-                InverseDwt.decode53(ints[c], w, tc.resolutions, tc.minimumNumResolutions);
+            TileLayout.Component tc = tile.components[c];
+            int w = tc.top().width();
+            if (tile.coding.components[c].transform == 1) {
+                InverseDwt.decode53(ints[c], w, tc.resolutions, tc.minimumNumResolutions, threads);
             } else {
-                InverseDwt.decode97(floats[c], w, tc.resolutions, tc.minimumNumResolutions);
+                InverseDwt.decode97(floats[c], w, tc.resolutions, tc.minimumNumResolutions, threads);
             }
         }
-        int kind = mct(tile, ints, floats);
+        int kind = mct(tile, ints, floats, threads);
         // ICT, level shift and clamp in one pass over the three components (same float
         // expressions, so the result is unchanged)
-        int[][] fused = kind == ICT ? ictLevelShift(cs, tile, floats) : null;
+        int[][] fused = kind == ICT ? ictLevelShift(cs, tile, floats, threads) : null;
         DecodedComponent[] out = new DecodedComponent[nc];
         for (int c = 0; c < nc; c++) {
             TileLayout.Component tc = tile.components[c];
             Resolution top = tc.top();
             int[] samples = fused != null && c < 3 ? fused[c]
-                    : dcLevelShift(cs.components[c], tile.coding.components[c], ints[c], floats[c], top.width() * top.height());
+                    : dcLevelShift(cs.components[c], tile.coding.components[c], ints[c], floats[c],
+                    top.width() * top.height(), threads);
             out[c] = new DecodedComponent(top.x0, top.y0, top.x1, top.y1, samples);
         }
         return out;
+    }
+
+    /** Samples per work item for the element-wise passes (MCT, level shift). */
+    static final int SAMPLES_PER_ITEM = 1 << 16;
+
+    /** Runs {@code body(from, to)} over [0, n) in SAMPLES_PER_ITEM ranges. */
+    interface Range {
+        void run(int from, int to);
+    }
+
+    static void ranges(Jpeg2000Threads threads, int n, Range body) throws JpxException {
+        int per = Parallel.ignoreThresholds ? 256 : SAMPLES_PER_ITEM;
+        int items = (n + per - 1) / per;
+        if (items <= 1 || !Parallel.worthIt(threads, true)) {
+            body.run(0, n);
+            return;
+        }
+        Parallel.forEach(threads, items, () -> i -> body.run(i * per, Math.min(n, (i + 1) * per)));
     }
 
     /**
@@ -196,7 +228,8 @@ public final class TileDecoder {
      * sample's RGB is computed as InverseMct.decodeIrreversible computes it, then rounded,
      * shifted and clamped as dcLevelShift does.
      */
-    private static int[][] ictLevelShift(Codestream cs, TileLayout tile, float[][] floats) {
+    private static int[][] ictLevelShift(Codestream cs, TileLayout tile, float[][] floats, Jpeg2000Threads threads)
+            throws JpxException {
         int n = tile.components[0].top().width() * tile.components[0].top().height();
         float[] c0 = floats[0], c1 = floats[1], c2 = floats[2];
         int[] o0 = new int[n], o1 = new int[n], o2 = new int[n];
@@ -215,14 +248,16 @@ public final class TileDecoder {
         int min0 = min[0], max0 = max[0], s0 = shift[0];
         int min1 = min[1], max1 = max[1], s1 = shift[1];
         int min2 = min[2], max2 = max[2], s2 = shift[2];
-        for (int i = 0; i < n; ++i) {
-            float y = c0[i];
-            float u = c1[i];
-            float v = c2[i];
-            o0[i] = levelShift(y + (v * 1.402f), s0, min0, max0);
-            o1[i] = levelShift(y - (u * 0.34413f) - (v * (0.71414f)), s1, min1, max1);
-            o2[i] = levelShift(y + (u * 1.772f), s2, min2, max2);
-        }
+        ranges(threads, n, (from, to) -> {
+            for (int i = from; i < to; ++i) {
+                float y = c0[i];
+                float u = c1[i];
+                float v = c2[i];
+                o0[i] = levelShift(y + (v * 1.402f), s0, min0, max0);
+                o1[i] = levelShift(y - (u * 0.34413f) - (v * (0.71414f)), s1, min1, max1);
+                o2[i] = levelShift(y + (u * 1.772f), s2, min2, max2);
+            }
+        });
         return new int[][]{o0, o1, o2};
     }
 
@@ -236,68 +271,117 @@ public final class TileDecoder {
     }
 
     /** opj_tcd_t1_decode + opj_t1_clbl_decode_processor for one tile-component. */
-    private void decodeCodeBlocks(TileLayout.Component tc, ComponentCoding tccp, int tileW, int[] ints, float[] floats)
+    /** One code-block to decode, with where it goes. */
+    private static final class BlockJob {
+        final CodeBlock cblk;
+        final Band band;
+        final int component, x, y;
+
+        BlockJob(CodeBlock cblk, Band band, int component, int x, int y) {
+            this.cblk = cblk;
+            this.band = band;
+            this.component = component;
+            this.x = x;
+            this.y = y;
+        }
+    }
+
+    /**
+     * opj_tcd_t1_decode: every code-block of every component, each decoded and placed into its
+     * own area of the tile-component buffer, so they can run on several threads.
+     */
+    private void decodeCodeBlocks(TileLayout tile, int[][] ints, float[][] floats, Jpeg2000Threads threads)
             throws JpxException {
-        for (int r = 0; r < tc.minimumNumResolutions; r++) {
-            Resolution res = tc.resolutions[r];
-            for (Band band : res.bands) {
-                if (band.isEmpty()) continue;
-                for (Precinct prc : band.precincts) {
-                    for (CodeBlock cblk : prc.codeBlocks) {
-                        int cw = cblk.x1 - cblk.x0, ch = cblk.y1 - cblk.y0;
-                        if (cw <= 0 || ch <= 0) continue;
-                        decodeCodeBlock(cblk, band, tccp, cw, ch);
-                        int x = cblk.x0 - band.x0, y = cblk.y0 - band.y0;
-                        if ((band.bandNo & 1) != 0) x += tc.resolutions[r - 1].width();
-                        if ((band.bandNo & 2) != 0) y += tc.resolutions[r - 1].height();
-                        int[] d = t1.data();
-                        if (ints != null) {
-                            for (int j = 0; j < ch; j++) {
-                                int o = (y + j) * tileW + x;
-                                for (int i = 0; i < cw; i++) ints[o + i] = d[j * cw + i] / 2;
-                            }
-                        } else {
-                            float step = 0.5f * band.stepSize;
-                            for (int j = 0; j < ch; j++) {
-                                int o = (y + j) * tileW + x;
-                                for (int i = 0; i < cw; i++) floats[o + i] = (float) d[j * cw + i] * step;
-                            }
+        List<BlockJob> jobs = new ArrayList<>();
+        for (int c = 0; c < tile.components.length; c++) {
+            TileLayout.Component tc = tile.components[c];
+            for (int r = 0; r < tc.minimumNumResolutions; r++) {
+                Resolution res = tc.resolutions[r];
+                for (Band band : res.bands) {
+                    if (band.isEmpty()) continue;
+                    for (Precinct prc : band.precincts) {
+                        for (CodeBlock cblk : prc.codeBlocks) {
+                            if (cblk.x1 - cblk.x0 <= 0 || cblk.y1 - cblk.y0 <= 0) continue;
+                            int x = cblk.x0 - band.x0, y = cblk.y0 - band.y0;
+                            if ((band.bandNo & 1) != 0) x += tc.resolutions[r - 1].width();
+                            if ((band.bandNo & 2) != 0) y += tc.resolutions[r - 1].height();
+                            jobs.add(new BlockJob(cblk, band, c, x, y));
                         }
                     }
                 }
             }
         }
+        if (!Parallel.worthIt(threads, jobs.size() >= PARALLEL_MIN_BLOCKS)) {
+            for (BlockJob j : jobs) serial.run(tile, j, ints, floats);
+            return;
+        }
+        Parallel.forEach(threads, jobs.size(), () -> {
+            BlockWorker worker = new BlockWorker();
+            return i -> worker.run(tile, jobs.get(i), ints, floats);
+        });
     }
 
-    private void decodeCodeBlock(CodeBlock cblk, Band band, ComponentCoding tccp, int cw, int ch) throws JpxException {
-        int numSegs = cblk.corrupted || cblk.numChunks == 0 ? 0 : cblk.realNumSegs;
-        byte[] buf;
-        int off;
-        if (cblk.numChunks == 1) {
-            buf = cblk.chunkData[0];
-            off = cblk.chunkOffset[0];
-        } else {
-            int len = 0;
-            for (int i = 0; i < cblk.numChunks; i++) len += cblk.chunkLength[i];
-            if (concat.length < len) concat = new byte[len];
-            int o = 0;
-            for (int i = 0; i < cblk.numChunks; i++) {
-                System.arraycopy(cblk.chunkData[i], cblk.chunkOffset[i], concat, o, cblk.chunkLength[i]);
-                o += cblk.chunkLength[i];
+    /** A code-block decoder and its scratch buffers: one per thread. */
+    private static final class BlockWorker {
+        private final CodeBlockDecoder t1 = new CodeBlockDecoder();
+        private byte[] concat = new byte[0];
+        private int[] segLength = new int[16];
+        private int[] segPasses = new int[16];
+
+        /** Decodes the code-block and places it (opj_t1_clbl_decode_processor). */
+        void run(TileLayout tile, BlockJob job, int[][] ints, float[][] floats) throws JpxException {
+            CodeBlock cblk = job.cblk;
+            int cw = cblk.x1 - cblk.x0, ch = cblk.y1 - cblk.y0;
+            int tileW = tile.components[job.component].top().width();
+            decodeCodeBlock(cblk, job.band, tile.coding.components[job.component], cw, ch);
+            int[] d = t1.data();
+            int x = job.x, y = job.y;
+            int[] ia = ints[job.component];
+            if (ia != null) {
+                for (int j = 0; j < ch; j++) {
+                    int o = (y + j) * tileW + x;
+                    for (int i = 0; i < cw; i++) ia[o + i] = d[j * cw + i] / 2;
+                }
+            } else {
+                float[] fa = floats[job.component];
+                float step = 0.5f * job.band.stepSize;
+                for (int j = 0; j < ch; j++) {
+                    int o = (y + j) * tileW + x;
+                    for (int i = 0; i < cw; i++) fa[o + i] = (float) d[j * cw + i] * step;
+                }
             }
-            buf = concat;
-            off = 0;
         }
-        if (segLength.length < numSegs) {
-            segLength = new int[numSegs];
-            segPasses = new int[numSegs];
+
+        private void decodeCodeBlock(CodeBlock cblk, Band band, ComponentCoding tccp, int cw, int ch) throws JpxException {
+            int numSegs = cblk.corrupted || cblk.numChunks == 0 ? 0 : cblk.realNumSegs;
+            byte[] buf;
+            int off;
+            if (cblk.numChunks == 1) {
+                buf = cblk.chunkData[0];
+                off = cblk.chunkOffset[0];
+            } else {
+                int len = 0;
+                for (int i = 0; i < cblk.numChunks; i++) len += cblk.chunkLength[i];
+                if (concat.length < len) concat = new byte[len];
+                int o = 0;
+                for (int i = 0; i < cblk.numChunks; i++) {
+                    System.arraycopy(cblk.chunkData[i], cblk.chunkOffset[i], concat, o, cblk.chunkLength[i]);
+                    o += cblk.chunkLength[i];
+                }
+                buf = concat;
+                off = 0;
+            }
+            if (segLength.length < numSegs) {
+                segLength = new int[numSegs];
+                segPasses = new int[numSegs];
+            }
+            for (int s = 0; s < numSegs; s++) {
+                segLength[s] = cblk.segs[s].length;
+                segPasses[s] = cblk.segs[s].realNumPasses;
+            }
+            t1.decode(cw, ch, buf, off, segLength, segPasses, numSegs, cblk.numBitPlanes, band.bandNo, tccp.roiShift,
+                    tccp.cblkStyle);
         }
-        for (int s = 0; s < numSegs; s++) {
-            segLength[s] = cblk.segs[s].length;
-            segPasses[s] = cblk.segs[s].realNumPasses;
-        }
-        t1.decode(cw, ch, buf, off, segLength, segPasses, numSegs, cblk.numBitPlanes, band.bandNo, tccp.roiShift,
-                tccp.cblkStyle);
     }
 
     static final int NO_MCT = 0, RCT = 1, ICT = 2;
@@ -306,7 +390,8 @@ public final class TileDecoder {
      * opj_tcd_mct_decode. The RCT is applied here; for the ICT only the checks are, and the
      * caller fuses the transform with the level shift (ictLevelShift).
      */
-    private static int mct(TileLayout tile, int[][] ints, float[][] floats) throws JpxException {
+    private static int mct(TileLayout tile, int[][] ints, float[][] floats, Jpeg2000Threads threads)
+            throws JpxException {
         if (tile.coding.mct == 0) return NO_MCT;
         if (tile.components.length < 3) return NO_MCT; // OpenJPEG: warning, MCT skipped
         int n = tile.components[0].top().width() * tile.components[0].top().height();
@@ -319,7 +404,8 @@ public final class TileDecoder {
         }
         if (tile.coding.components[0].transform == 1) {
             if (ints[1] == null || ints[2] == null) throw new JpxException("RCT over components with different transforms");
-            InverseMct.decodeReversible(ints[0], ints[1], ints[2], n);
+            int[] c0 = ints[0], c1 = ints[1], c2 = ints[2];
+            ranges(threads, n, (from, to) -> InverseMct.decodeReversible(c0, c1, c2, from, to));
             return RCT;
         } else {
             if (floats[1] == null || floats[2] == null) throw new JpxException("ICT over components with different transforms");
@@ -328,7 +414,8 @@ public final class TileDecoder {
     }
 
     /** opj_tcd_dc_level_shift_decode: add the DC offset, round (9/7) and clamp to the precision. */
-    private static int[] dcLevelShift(Codestream.Component ic, ComponentCoding tccp, int[] ints, float[] floats, int n) {
+    private static int[] dcLevelShift(Codestream.Component ic, ComponentCoding tccp, int[] ints, float[] floats, int n,
+                                      Jpeg2000Threads threads) throws JpxException {
         int min, max;
         if (ic.signed) {
             min = -(1 << (ic.precision - 1));
@@ -337,27 +424,20 @@ public final class TileDecoder {
             min = 0;
             max = (int) ((1L << ic.precision) - 1);
         }
-        int shift = tccp.dcLevelShift;
+        int shift = tccp.dcLevelShift, lo = min, hi = max;
         if (ints != null) {
-            for (int i = 0; i < n; i++) {
-                long v = (long) ints[i] + shift;
-                ints[i] = (int) Math.max(min, Math.min(max, v));
-            }
+            ranges(threads, n, (from, to) -> {
+                for (int i = from; i < to; i++) {
+                    long v = (long) ints[i] + shift;
+                    ints[i] = (int) Math.max(lo, Math.min(hi, v));
+                }
+            });
             return ints;
         }
         int[] out = new int[n];
-        for (int i = 0; i < n; i++) {
-            float value = floats[i];
-            if (value > (float) Integer.MAX_VALUE) {
-                out[i] = max;
-            } else if (value < Integer.MIN_VALUE) {
-                out[i] = min;
-            } else {
-                // opj_lrintf: round half to even
-                long v = (long) Math.rint(value) + shift;
-                out[i] = (int) Math.max(min, Math.min(max, v));
-            }
-        }
+        ranges(threads, n, (from, to) -> {
+            for (int i = from; i < to; i++) out[i] = levelShift(floats[i], shift, lo, hi);
+        });
         return out;
     }
 }

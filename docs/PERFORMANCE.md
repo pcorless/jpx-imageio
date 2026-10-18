@@ -51,6 +51,7 @@ every access missed the cache: OpenJPEG does that pass 8 columns at a time for t
 | 9/7 vertical pass 16 columns at a time (opj_v8dwt layout, scalar) | 25.7 / 26.5 (+11-14%) | yes |
 | + 9/7 horizontal pass 16 rows at a time (transposed into lanes) | 23.9 | no: the transpose costs more |
 | + 9/7 horizontal lifting on split low/high arrays | 24.9 / 26.0 | no: within noise |
+| ICT fused with level shift and clamp (one pass over the three components) | 26.4 / 26.7 vs 26.3 / 25.3 (about +3%, edge of noise) | yes |
 | MQ registers (C, A, CT) in locals in the MQ passes (OpenJPEG's DOWNLOAD/UPLOAD_MQC_VARIABLES), decode inlined by hand at each site | 25.2 / 25.1 vs 25.9 / 26.2 (-3.5%) | no |
 
 Every change is checked bit-exact: fixtures, and the full corpus A/B (3,742 of 3,744 EXACT).
@@ -71,6 +72,6 @@ vertical ~17%), ICT 9%, tier-1 passes and placement 11%, level shift 3%.
    loses the constant-`ci` unrolling of the old step calls. Unrolling it by hand would push the
    cleanup pass toward C2's 8,000-byte huge-method limit. Don't retry without a JMH
    micro-benchmark of tier-1 alone.
-3. **Fuse ICT, level shift and clamp** into one pass over the three components, with float
-   rounding instead of `Math.rint` on doubles.
+3. ~~Fuse ICT, level shift and clamp~~: done, about +3%. `Math.rint` stays (exact, and C2
+   compiles it to one rounding instruction).
 4. 5/3 vertical pass in column blocks (280 corpus files use 5/3).

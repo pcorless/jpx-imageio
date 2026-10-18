@@ -19,7 +19,9 @@
  *   and the placement and dequantisation of opj_t1_clbl_decode_processor (x/y of the
  *   code-block in the tile buffer; /2 for 5/3, x 0.5 * step size for 9/7) plus the chunk
  *   concatenation of opj_t1_decode_cblk.
- *   Changed: separate int[] / float[] buffers instead of one buffer reinterpreted as float;
+ *   Changed: the ICT (opj_mct_decode_real's expressions) runs fused with the level shift and
+ *   clamp, one pass over the three components;
+ *   separate int[] / float[] buffers instead of one buffer reinterpreted as float;
  *   always the whole tile (no window / sparse-array partial decode yet); the DWT always runs
  *   to the decoded resolution count (OpenJPEG lowers it when no packet of the top resolution
  *   was read at all).
@@ -174,15 +176,63 @@ public final class TileDecoder {
                 InverseDwt.decode97(floats[c], w, tc.resolutions, tc.minimumNumResolutions);
             }
         }
-        mct(tile, ints, floats);
+        int kind = mct(tile, ints, floats);
+        // ICT, level shift and clamp in one pass over the three components (same float
+        // expressions, so the result is unchanged)
+        int[][] fused = kind == ICT ? ictLevelShift(cs, tile, floats) : null;
         DecodedComponent[] out = new DecodedComponent[nc];
         for (int c = 0; c < nc; c++) {
             TileLayout.Component tc = tile.components[c];
             Resolution top = tc.top();
-            out[c] = new DecodedComponent(top.x0, top.y0, top.x1, top.y1,
-                    dcLevelShift(cs.components[c], tile.coding.components[c], ints[c], floats[c], top.width() * top.height()));
+            int[] samples = fused != null && c < 3 ? fused[c]
+                    : dcLevelShift(cs.components[c], tile.coding.components[c], ints[c], floats[c], top.width() * top.height());
+            out[c] = new DecodedComponent(top.x0, top.y0, top.x1, top.y1, samples);
         }
         return out;
+    }
+
+    /**
+     * opj_mct_decode_real then opj_tcd_dc_level_shift_decode for components 0-2, fused: each
+     * sample's RGB is computed as InverseMct.decodeIrreversible computes it, then rounded,
+     * shifted and clamped as dcLevelShift does.
+     */
+    private static int[][] ictLevelShift(Codestream cs, TileLayout tile, float[][] floats) {
+        int n = tile.components[0].top().width() * tile.components[0].top().height();
+        float[] c0 = floats[0], c1 = floats[1], c2 = floats[2];
+        int[] o0 = new int[n], o1 = new int[n], o2 = new int[n];
+        int[] min = new int[3], max = new int[3], shift = new int[3];
+        for (int c = 0; c < 3; c++) {
+            Codestream.Component ic = cs.components[c];
+            if (ic.signed) {
+                min[c] = -(1 << (ic.precision - 1));
+                max[c] = (1 << (ic.precision - 1)) - 1;
+            } else {
+                min[c] = 0;
+                max[c] = (int) ((1L << ic.precision) - 1);
+            }
+            shift[c] = tile.coding.components[c].dcLevelShift;
+        }
+        int min0 = min[0], max0 = max[0], s0 = shift[0];
+        int min1 = min[1], max1 = max[1], s1 = shift[1];
+        int min2 = min[2], max2 = max[2], s2 = shift[2];
+        for (int i = 0; i < n; ++i) {
+            float y = c0[i];
+            float u = c1[i];
+            float v = c2[i];
+            o0[i] = levelShift(y + (v * 1.402f), s0, min0, max0);
+            o1[i] = levelShift(y - (u * 0.34413f) - (v * (0.71414f)), s1, min1, max1);
+            o2[i] = levelShift(y + (u * 1.772f), s2, min2, max2);
+        }
+        return new int[][]{o0, o1, o2};
+    }
+
+    /** One sample of the float branch of dcLevelShift. */
+    private static int levelShift(float value, int shift, int min, int max) {
+        if (value > (float) Integer.MAX_VALUE) return max;
+        if (value < Integer.MIN_VALUE) return min;
+        // opj_lrintf: round half to even
+        long v = (long) Math.rint(value) + shift;
+        return (int) Math.max(min, Math.min(max, v));
     }
 
     /** opj_tcd_t1_decode + opj_t1_clbl_decode_processor for one tile-component. */
@@ -250,10 +300,15 @@ public final class TileDecoder {
                 tccp.cblkStyle);
     }
 
-    /** opj_tcd_mct_decode. */
-    private static void mct(TileLayout tile, int[][] ints, float[][] floats) throws JpxException {
-        if (tile.coding.mct == 0) return;
-        if (tile.components.length < 3) return; // OpenJPEG: warning, MCT skipped
+    static final int NO_MCT = 0, RCT = 1, ICT = 2;
+
+    /**
+     * opj_tcd_mct_decode. The RCT is applied here; for the ICT only the checks are, and the
+     * caller fuses the transform with the level shift (ictLevelShift).
+     */
+    private static int mct(TileLayout tile, int[][] ints, float[][] floats) throws JpxException {
+        if (tile.coding.mct == 0) return NO_MCT;
+        if (tile.components.length < 3) return NO_MCT; // OpenJPEG: warning, MCT skipped
         int n = tile.components[0].top().width() * tile.components[0].top().height();
         for (int c = 1; c < 3; c++) {
             Resolution r = tile.components[c].top();
@@ -265,9 +320,10 @@ public final class TileDecoder {
         if (tile.coding.components[0].transform == 1) {
             if (ints[1] == null || ints[2] == null) throw new JpxException("RCT over components with different transforms");
             InverseMct.decodeReversible(ints[0], ints[1], ints[2], n);
+            return RCT;
         } else {
             if (floats[1] == null || floats[2] == null) throw new JpxException("ICT over components with different transforms");
-            InverseMct.decodeIrreversible(floats[0], floats[1], floats[2], n);
+            return ICT;
         }
     }
 

@@ -2,6 +2,7 @@
  * Provenance: ORIGINAL. Times libopenjp2 decoding in-process, single-threaded: each file is
  * read into memory once, then decoded `passes` times; prints per-file best time in ms.
  * Usage: opjbench passes file...    Build: see tools/bench/README.md
+ * Threads: OPJBENCH_THREADS (default 1), passed to opj_codec_set_threads.
  */
 #include <openjpeg.h>
 #include <stdio.h>
@@ -33,6 +34,8 @@ static OPJ_BOOL st(OPJ_OFF_T n, void *u) {
 }
 static void quiet(const char *msg, void *u) { (void) msg; (void) u; }
 
+static int threads = 1;
+
 static int decode(const unsigned char *data, size_t len) {
     mem_t m = {data, len, 0};
     OPJ_CODEC_FORMAT fmt = (len > 1 && data[0] == 0xFF && data[1] == 0x4F) ? OPJ_CODEC_J2K : OPJ_CODEC_JP2;
@@ -43,7 +46,7 @@ static int decode(const unsigned char *data, size_t len) {
     opj_dparameters_t p;
     opj_set_default_decoder_parameters(&p);
     opj_setup_decoder(codec, &p);
-    opj_codec_set_threads(codec, 1);
+    opj_codec_set_threads(codec, threads);
     opj_stream_t *s = opj_stream_default_create(OPJ_TRUE);
     opj_stream_set_user_data(s, &m, NULL);
     opj_stream_set_user_data_length(s, len);
@@ -66,6 +69,7 @@ static double now(void) {
 
 int main(int argc, char **argv) {
     int passes = atoi(argv[1]);
+    if (getenv("OPJBENCH_THREADS")) threads = atoi(getenv("OPJBENCH_THREADS"));
     for (int i = 2; i < argc; i++) {
         FILE *f = fopen(argv[i], "rb");
         if (!f) continue;

@@ -231,7 +231,6 @@ public final class Jpeg2000Decoder {
             ch[c] = cy1 - cy;
             long size = (long) cw[c] * ch[c];
             if (size > Integer.MAX_VALUE - 8) throw JpxException.unsupported("component of " + size + " samples");
-            samples[c] = new int[(int) size];
         }
         // tiles that meet the area (B.3)
         int p0 = (int) Math.max(0, ((long) x0 - cs.tileX0) / cs.tileWidth);
@@ -242,6 +241,9 @@ public final class Jpeg2000Decoder {
         // several tiles: one tile per work item, each decoded serially; one tile: the threads go
         // to its code-blocks and transforms instead
         boolean tiles = total > 1;
+        if (tiles) {
+            for (int c = 0; c < nc; c++) samples[c] = new int[cw[c] * ch[c]];
+        }
         Jpeg2000Threads inner = tiles ? Jpeg2000Threads.NONE : threads;
         Parallel.forEach(tiles ? threads : Jpeg2000Threads.NONE, total, () -> {
             TileDecoder decoder = new TileDecoder();
@@ -252,9 +254,20 @@ public final class Jpeg2000Decoder {
                     return;
                 }
                 DecodedComponent[] tile = decoder.decode(cs, t, reduce, inner);
-                for (int c = 0; c < nc; c++) copy(tile[c], samples[c], cx0[c], cy0[c], cw[c], ch[c]);
+                for (int c = 0; c < nc; c++) {
+                    DecodedComponent dc = tile[c];
+                    if (!tiles && dc.x0 == cx0[c] && dc.y0 == cy0[c] && dc.width() == cw[c] && dc.height() == ch[c]) {
+                        samples[c] = dc.samples; // one tile that is exactly the output: no copy
+                    } else {
+                        if (samples[c] == null) samples[c] = new int[cw[c] * ch[c]];
+                        copy(dc, samples[c], cx0[c], cy0[c], cw[c], ch[c]);
+                    }
+                }
             };
         }, progress == null ? null : done -> progress.tileDone(done, total));
+        for (int c = 0; c < nc; c++) {
+            if (samples[c] == null) samples[c] = new int[cw[c] * ch[c]]; // a tile with no data
+        }
         return result(cs, cw, ch, samples);
     }
 

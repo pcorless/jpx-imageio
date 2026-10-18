@@ -60,12 +60,39 @@ Every change is checked bit-exact: fixtures, and the full corpus A/B (3,742 of 3
 After the vertical change (every 4th file): MQ decoder 30%, 9/7 DWT 39% (horizontal ~22%,
 vertical ~17%), ICT 9%, tier-1 passes and placement 11%, level shift 3%.
 
+## Threads (2026-10-17)
+
+`Jpeg2000Threads` / `THREADING-PLAN.md`. Every 4th corpus file, pinned to the 16 physical cores
+(CPUs 0-15), wall-clock per file, `-Dorg.icepdf.jpx.parallelism=N`:
+
+| Images | 1 | 2 | 4 | 8 | 16 threads |
+|---|---|---|---|---|---|
+| all (936 files) | 28.7 | 52.9 | 90.8 | 123.2 (4.3x) | 135.9 (4.7x) MP/s |
+| single-tile, >= 1 MP | 41.6 | 74.1 | 122.0 | 147.5 (3.5x) | 153.2 MP/s |
+| tiled, >= 1 MP | 22.0 | 41.9 | 77.4 | 122.4 (5.6x) | 149.0 (6.8x) MP/s |
+| < 0.1 MP | 22.0 | 29.1 | 32.0 | 30.1 | 29.3 MP/s |
+
+OpenJPEG 2.5.4 on the same files and cores, `opj_codec_set_threads`: strict build 34.8 MP/s at
+1 thread, 46.3 at 8; stock Release 44.4 at 1, 60.7 at 8.
+
+Single-tile photos, phase times for 60 of them (s), after removing the tile-to-output copy:
+
+| | layout + tier-2 | code-blocks | DWT | MCT + level shift | outside the tile |
+|---|---|---|---|---|---|
+| 1 thread | 0.27 | 1.10 | 6.52 | 1.69 | 0.01 |
+| 8 threads | 0.27 | 0.43 | 1.20 | 0.70 | 0.01 |
+
+What's left at 8 threads: tier-2 is serial by nature (as in OpenJPEG); MCT + level shift scales
+2.4x because it is memory-bound (allocating the three output arrays on several threads changed
+nothing). Before the fix, copying a single tile into fresh whole-image arrays cost 0.79 s of
+3.30 s; a tile that is exactly the output is now handed over as is.
+
+Tried and dropped: exact float rounding by adding 1.5 x 2^23 instead of `Math.rint` (2.5x faster
+in a micro-benchmark, no change end to end: the pass is memory-bound).
+
 ## Next, by expected gain
 
-1. **Threads.** OpenJPEG decodes code-blocks and DWT strips in parallel; so far everything here
-   is on one thread. Code-blocks are independent, and the DWT splits into row and column strips.
-   Largest lever by far for a single large image; ICEpdf already renders pages in parallel, so
-   the pool must be shared and bounded.
+1. ~~Threads~~: done, above.
 2. ~~Tier-1 state in locals~~: tried, 3.5% slower (above). C2 compiled the passes normally;
    the likely reason (not proven) is that once `MqDecoder.decode` is inlined into a pass loop,
    C2 already keeps the MQ fields in registers (fields and `int[]` elements are separate alias

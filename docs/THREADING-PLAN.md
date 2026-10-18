@@ -1,4 +1,9 @@
-# Threading plan (proposal, 2026-10-17)
+# Threading plan (2026-10-17)
+
+**Status: implemented** (commits 78f8206 and after), with these changes from the proposal: the
+default pool is a library-owned `ForkJoinPool` (D-21), an options object was added
+(`Jpeg2000Decoder.Options`), progress is reported on the calling thread, and a single tile that
+is exactly the output is used without copying. Results: `PERFORMANCE.md` "Threads".
 
 Goal: decode one large image on several cores, without oversubscribing a host (ICEpdf) that
 already decodes several images at once, and without changing a single output sample.

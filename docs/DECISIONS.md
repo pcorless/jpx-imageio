@@ -252,3 +252,20 @@ code, which isn't ported). `Jpeg2000Layout` decides, ORIGINAL:
   `Jpeg2000ImageReaderSpi.preferOverOtherReaders()` for applications to call (after any
   `ImageIO.scanForPlugins()`). ICEpdf selects by SPI class name, as the contract already says.
   Deregistering JJ2000 was rejected: an application may want both.
+
+## D-21 Threads on by default, own ForkJoinPool, capped at 8 (2026-10-17)
+
+- **Decided with the maintainer:** threads on by default for plain `ImageIO.read` users, with
+  overrides for small hardware: `-Dorg.icepdf.jpx.parallelism=N` (`1` = none),
+  `Jpeg2000Threads.setDefaults(...)`, per decode `Options.threads` / `Jpeg2000ImageReadParam`.
+- **Pool:** a `ForkJoinPool` owned by the library rather than `ForkJoinPool.commonPool()`: the
+  common pool is shared with parallel streams and sized by another property, and on 1-2 core
+  machines it degrades in ways the library doesn't control. Daemon threads named `icepdf-jpx-N`,
+  `parallelism - 1` of them (the calling thread is the last worker).
+- **Scheduling is caller-helps, not `join()`:** an ICEpdf worker (not a pool thread) that joins
+  a ForkJoinTask can simply block; `Parallel.forEach` never waits for a queued helper.
+- **Cap 8, measured:** on the corpus subset 8 threads give 4.3x and 16 give 4.7x (+10% for twice
+  the threads), small images stop gaining at about 4; a host decoding several images at once
+  already gets parallelism across them.
+- **Unchanged output:** `ThreadedDecodeTest` (every reference, thresholds off) and the full corpus
+  A/B with threads on and 16 concurrent decodes: 3,742 / 3,744 EXACT.

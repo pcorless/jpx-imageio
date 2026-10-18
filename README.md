@@ -5,7 +5,8 @@ Java 11, Apache 2.0, with portions derived from OpenJPEG 2.5.4 (BSD-2; see `NOTI
 
 Status: **Phase 1** (GH-613). J2K and JP2 decoding is bit-exact against OpenJPEG 2.5.4 on the
 fixtures and on 3,742 of 3,744 real PDF streams (the other 2 are rejected by both); the ImageIO
-reader meets `docs/IMAGEIO-CONTRACT.md`. Not yet tuned for speed (single-threaded) or fuzzed.
+reader meets `docs/IMAGEIO-CONTRACT.md`. Single-threaded it runs at about 0.8x OpenJPEG; with its default threads about 2x OpenJPEG's own
+threaded decode (`docs/PERFORMANCE.md`). Not fuzzed yet.
 
 ## Use
 
@@ -23,7 +24,11 @@ BufferedImage image = ImageIO.read(new File("photo.jp2"));
   two discard resolution levels), source/destination bands, destination and offset.
 - With JJ2000 (`jai-imageio-jpeg2000`) also installed, call
   `Jpeg2000ImageReaderSpi.preferOverOtherReaders()` to be sure this reader is offered first.
-- Without ImageIO: `Jpeg2000Decoder.decodeImage(bytes, 0, bytes.length, reduce)`.
+- Threads: on by default (a shared pool of up to `min(cores, 8)` threads, the caller included).
+  `-Dorg.icepdf.jpx.parallelism=1` turns them off; `Jpeg2000Threads.setDefaults(...)` or a
+  `Jpeg2000ImageReadParam` choose per process or per read. Output never depends on the count.
+- Without ImageIO: `Jpeg2000Decoder.decodeImage(bytes, 0, bytes.length, reduce)`, or with
+  `Jpeg2000Decoder.Options` for an area, progress and threads.
 
 - Requirements: `docs/IMAGEIO-CONTRACT.md`
 - Provenance rules and the per-file record: `docs/PROVENANCE-RULES.md`, `PROVENANCE.md`

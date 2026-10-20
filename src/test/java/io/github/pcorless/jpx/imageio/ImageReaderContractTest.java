@@ -316,6 +316,24 @@ public class ImageReaderContractTest {
         }
     }
 
+    /**
+     * regress/icc-unlinkable.jp2 is jp2-icc-gray.jp2 with one byte of its ICC profile changed (found by
+     * mutation fuzzing): the profile parses, but the CMM can't link it, which used to escape as an
+     * unchecked CMMException from the colour model.
+     */
+    @Test
+    public void unlinkableIccProfileIsGuessedAround() throws Exception {
+        try (ImageInputStream in = stream(resource("/regress/icc-unlinkable.jp2"))) {
+            ImageReader r = spi().createReaderInstance();
+            AtomicInteger warnings = new AtomicInteger();
+            r.addIIOReadWarningListener((source, warning) -> warnings.incrementAndGet());
+            r.setInput(in);
+            assertEquals(64, r.getWidth(0));
+            assertEquals(64, r.read(0).getWidth());
+            assertTrue(warnings.get() >= 1, "unusable ICC profile warning");
+        }
+    }
+
     @Test
     public void metadata() throws Exception {
         withReader(JP2, r -> {

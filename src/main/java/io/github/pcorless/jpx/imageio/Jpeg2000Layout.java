@@ -98,6 +98,9 @@ final class Jpeg2000Layout {
                     ICC_Profile p = ICC_Profile.getInstance(colr.iccProfile);
                     ColorSpace icc = new ICC_ColorSpace(p);
                     need = icc.getNumComponents();
+                    // the CMM links a profile lazily, so a damaged one would otherwise throw from the
+                    // colour model, or later from a conversion: link it here, both ways
+                    icc.fromRGB(icc.toRGB(new float[need]));
                     if (fit(colour, extra, need, hasCdef)) {
                         cs = icc;
                         name = "ICC";

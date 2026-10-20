@@ -270,3 +270,20 @@ code, which isn't ported). `Jpeg2000Layout` decides, ORIGINAL:
   already gets parallelism across them.
 - **Unchanged output:** `ThreadedDecodeTest` (every reference, thresholds off) and the full corpus
   A/B with threads on and 16 concurrent decodes: 3,742 / 3,744 EXACT.
+
+## D-22 A sample limit against decompression bombs, 2^28 by default (2026-10-19)
+
+- **Observed:** a 197-byte codestream whose SIZ declares one 40000 x 40000 tile made the decoder
+  allocate about 6.4 GB and throw `OutOfMemoryError`; a 3,840-case mutation fuzz of the fixtures hit
+  the same four times (dimensions damaged to millions of columns). A JPEG 2000 header is cheap to
+  inflate and the samples compress to almost nothing, so data size can't bound it. A 60000 x 60000
+  tiled header also escaped `read()` as an unchecked `IllegalArgumentException` from ImageIO's
+  `getDestination`.
+- **Measured:** the largest of the 3,744 corpus streams holds 60.5 million samples (5171 x 2923 x 4).
+- **Decision:** refuse, before allocating, a decode whose output or whose largest tile's working
+  buffers (decoded whole, whatever the area) would hold more than the limit, summed over components:
+  `JpxException.tooLarge`, `isUnsupported()` true. Default 2^28 (about 4x the corpus maximum, about
+  1 GB as ints); `-Dio.github.pcorless.jpx.maxSamples`, `Options.maxSamples`,
+  `Jpeg2000ImageReadParam.setMaxSamples` raise or lower it. The ImageIO reader checks its output
+  size before `getDestination` as well. A fixed limit rather than one from `Runtime.maxMemory()`, so
+  whether a file decodes doesn't depend on the heap.

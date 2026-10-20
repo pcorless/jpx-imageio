@@ -109,7 +109,33 @@ public final class Jpeg2000Decoder {
         }
     }
 
+    /**
+     * System property: the most samples one decode may hold, summed over components, in its output or in
+     * one tile's working buffers. {@value #DEFAULT_MAX_SAMPLES} by default.
+     */
+    public static final String MAX_SAMPLES_PROPERTY = "io.github.pcorless.jpx.maxSamples";
+
+    /**
+     * 2^28 samples, about 1 GB as ints: 16384 x 16384 grey or 9459 x 9459 RGB. The largest of 3,744
+     * JPEG 2000 streams from real PDFs holds 60 million (DECISIONS.md D-22).
+     */
+    public static final long DEFAULT_MAX_SAMPLES = 1L << 28;
+
     private Jpeg2000Decoder() {
+    }
+
+    /** {@value #MAX_SAMPLES_PROPERTY} when set to a positive number, otherwise {@value #DEFAULT_MAX_SAMPLES}. */
+    public static long defaultMaxSamples() {
+        String v = System.getProperty(MAX_SAMPLES_PROPERTY);
+        if (v != null) {
+            try {
+                long max = Long.parseLong(v.trim());
+                if (max > 0) return max;
+            } catch (NumberFormatException e) {
+                // keep the default
+            }
+        }
+        return DEFAULT_MAX_SAMPLES;
     }
 
     static int ceilDiv(long a, long b) {
@@ -136,12 +162,19 @@ public final class Jpeg2000Decoder {
                 .threads(Jpeg2000Threads.NONE));
     }
 
-    /** How to decode: resolution levels discarded, area, progress hook, threads. Not thread-safe. */
+    /** How to decode: resolution levels discarded, area, progress hook, threads, size limit. Not thread-safe. */
     public static final class Options {
         int reduce;
         long[] area;
         Progress progress;
         Jpeg2000Threads threads;
+        long maxSamples;
+
+        /** The most samples the decode may hold; {@link #defaultMaxSamples()} when not set or not positive. */
+        public Options maxSamples(long maxSamples) {
+            this.maxSamples = maxSamples;
+            return this;
+        }
 
         /** Discard {@code reduce} resolution levels (each halves the size). */
         public Options reduce(int reduce) {
@@ -173,7 +206,8 @@ public final class Jpeg2000Decoder {
         long[] a = o.area != null ? o.area : new long[]{cs.x0, cs.y0, cs.x1, cs.y1};
         Jpeg2000Threads threads = o.threads != null ? o.threads : Jpeg2000Threads.defaults();
         List<String> warnings = new ArrayList<>(h.warnings());
-        Component[] comps = decode(cs, o.reduce, a[0], a[1], a[2], a[3], o.progress, threads);
+        long max = o.maxSamples > 0 ? o.maxSamples : defaultMaxSamples();
+        Component[] comps = decode(cs, o.reduce, a[0], a[1], a[2], a[3], o.progress, threads, max);
         warnings.addAll(cs.warnings());
         if (h.jp2 != null) comps = Jp2Channels.apply(h.jp2, comps, warnings);
         return new Jpeg2000Image(comps, h.jp2, warnings);
@@ -211,6 +245,12 @@ public final class Jpeg2000Decoder {
     /** As {@link #decode(Codestream, int, long, long, long, long, Progress)}, using {@code threads}. */
     public static Component[] decode(Codestream cs, int reduce, long ax0, long ay0, long ax1, long ay1,
                                      Progress progress, Jpeg2000Threads threads) throws JpxException {
+        return decode(cs, reduce, ax0, ay0, ax1, ay1, progress, threads, defaultMaxSamples());
+    }
+
+    private static Component[] decode(Codestream cs, int reduce, long ax0, long ay0, long ax1, long ay1,
+                                      Progress progress, Jpeg2000Threads threads, long maxSamples)
+            throws JpxException {
         // opj_j2k_set_decode_area: clip to the image
         int x0 = (int) Math.max(ax0, cs.x0), y0 = (int) Math.max(ay0, cs.y0);
         int x1 = (int) Math.min(ax1, cs.x1), y1 = (int) Math.min(ay1, cs.y1);
@@ -232,6 +272,19 @@ public final class Jpeg2000Decoder {
             long size = (long) cw[c] * ch[c];
             if (size > Integer.MAX_VALUE - 8) throw JpxException.unsupported("component of " + size + " samples");
         }
+        // refuse before allocating anything: the output, and the working buffers of the largest tile
+        // (decoded whole, whatever the area), each summed over the components
+        long output = 0, tileSamples = 0;
+        int[] widestX = new int[256], widestY = new int[256]; // by subsampling (1-255); 0 = not yet
+        for (int c = 0; c < nc; c++) {
+            Codestream.Component ic = cs.components[c];
+            output += (long) cw[c] * ch[c];
+            if (widestX[ic.dx] == 0) widestX[ic.dx] = 1 + widestTile(cs.tileX0, cs.tileWidth, cs.tilesX, cs.x0, cs.x1, ic.dx, reduce);
+            if (widestY[ic.dy] == 0) widestY[ic.dy] = 1 + widestTile(cs.tileY0, cs.tileHeight, cs.tilesY, cs.y0, cs.y1, ic.dy, reduce);
+            tileSamples += (long) (widestX[ic.dx] - 1) * (widestY[ic.dy] - 1);
+        }
+        if (output > maxSamples) throw JpxException.tooLarge("image", output, maxSamples);
+        if (tileSamples > maxSamples) throw JpxException.tooLarge("tile", tileSamples, maxSamples);
         // tiles that meet the area (B.3)
         int p0 = (int) Math.max(0, ((long) x0 - cs.tileX0) / cs.tileWidth);
         int q0 = (int) Math.max(0, ((long) y0 - cs.tileY0) / cs.tileHeight);
@@ -269,6 +322,19 @@ public final class Jpeg2000Decoder {
             if (samples[c] == null) samples[c] = new int[cw[c] * ch[c]]; // a tile with no data
         }
         return result(cs, cw, ch, samples);
+    }
+
+    /**
+     * The widest tile-component along one axis, as opj_tcd_init_tile sizes it: the tile clipped to the
+     * image, divided by the subsampling and the discarded levels, both rounding up.
+     */
+    private static int widestTile(int t0, int size, int count, int i0, int i1, int d, int reduce) {
+        int widest = 0;
+        for (int i = 0; i < count; i++) {
+            long a = Math.max((long) t0 + (long) i * size, i0), b = Math.min((long) t0 + (long) (i + 1) * size, i1);
+            widest = Math.max(widest, ceilDivPow2(ceilDiv(b, d), reduce) - ceilDivPow2(ceilDiv(a, d), reduce));
+        }
+        return widest;
     }
 
     /** opj_j2k_update_image_data: copy the part of a tile-component inside the output window. */

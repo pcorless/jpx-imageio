@@ -20,9 +20,10 @@ package io.github.pcorless.jpx;
 import java.io.IOException;
 
 /**
- * A JPEG 2000 stream that can't be decoded: malformed, truncated past recovery, or using a
- * feature this decoder doesn't implement ({@link #isUnsupported()}). The only exception the
- * decoder throws for bad input; the ImageIO layer wraps it in an IIOException.
+ * A JPEG 2000 stream that can't be decoded: malformed, truncated past recovery, using a feature
+ * this decoder doesn't implement, or larger than the sample limit ({@link #isUnsupported()} for
+ * the last two). The only exception the decoder throws for bad input; the ImageIO reader lets it
+ * through as the IOException its methods declare.
  */
 public class JpxException extends IOException {
 
@@ -43,7 +44,16 @@ public class JpxException extends IOException {
         return new JpxException("unsupported JPEG 2000 feature: " + feature, true);
     }
 
-    /** True when the stream may be valid but uses something this decoder doesn't implement. */
+    /**
+     * A decode refused because it would hold more samples than {@code limit}: the stream may be valid,
+     * but a few hundred bytes can declare an image of billions of samples (a decompression bomb).
+     */
+    public static JpxException tooLarge(String what, long samples, long limit) {
+        return new JpxException(what + " of " + samples + " samples is over the limit of " + limit
+                + " (" + Jpeg2000Decoder.MAX_SAMPLES_PROPERTY + ")", true);
+    }
+
+    /** True when the stream may be valid but uses something this decoder doesn't implement, or is too large. */
     public boolean isUnsupported() {
         return unsupported;
     }

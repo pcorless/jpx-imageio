@@ -22,6 +22,7 @@ import io.github.pcorless.jpx.Jpeg2000Decoder;
 import io.github.pcorless.jpx.Jpeg2000Headers;
 import io.github.pcorless.jpx.Jpeg2000Image;
 import io.github.pcorless.jpx.Jpeg2000Threads;
+import io.github.pcorless.jpx.JpxException;
 import io.github.pcorless.jpx.codestream.Codestream;
 
 import javax.imageio.IIOException;
@@ -228,6 +229,7 @@ public final class Jpeg2000ImageReader extends ImageReader {
         check(imageIndex);
         if (param == null) param = getDefaultReadParam();
         int w = headers.codestream.width(), h = headers.codestream.height();
+        checkSize(param, w, h);
         Rectangle src = new Rectangle(), dst = new Rectangle();
         computeRegions(param, w, h, null, src, dst);
         int[] sourceBands = param.getSourceBands();
@@ -256,6 +258,7 @@ public final class Jpeg2000ImageReader extends ImageReader {
         check(imageIndex);
         if (param == null) param = getDefaultReadParam();
         int w = headers.codestream.width(), h = headers.codestream.height();
+        checkSize(param, w, h);
         BufferedImage dest = getDestination(param, getImageTypes(imageIndex), w, h);
         Rectangle src = new Rectangle(), dst = new Rectangle();
         computeRegions(param, w, h, dest, src, dst);
@@ -284,6 +287,29 @@ public final class Jpeg2000ImageReader extends ImageReader {
         }
         finish();
         return dest;
+    }
+
+    private static long maxSamples(ImageReadParam param) {
+        long max = param instanceof Jpeg2000ImageReadParam ? ((Jpeg2000ImageReadParam) param).getMaxSamples() : 0;
+        return max > 0 ? max : Jpeg2000Decoder.defaultMaxSamples();
+    }
+
+    /**
+     * Refuses a read whose output would be over the sample limit before the destination is made: the
+     * decoder checks its own buffers, but ImageIO's getDestination allocates first (and throws an
+     * unchecked exception past 2^31 pixels).
+     */
+    private void checkSize(ImageReadParam param, int w, int h) throws IOException {
+        Rectangle region = param.getSourceRegion();
+        long rw = w, rh = h;
+        if (region != null) {
+            rw = Math.max(0, Math.min((long) w, (long) region.x + region.width) - Math.max(0, region.x));
+            rh = Math.max(0, Math.min((long) h, (long) region.y + region.height) - Math.max(0, region.y));
+        }
+        long outW = (rw + param.getSourceXSubsampling() - 1) / param.getSourceXSubsampling();
+        long outH = (rh + param.getSourceYSubsampling() - 1) / param.getSourceYSubsampling();
+        long samples = outW * outH * layout.channels, max = maxSamples(param);
+        if (samples > max) throw JpxException.tooLarge("image", samples, max);
     }
 
     private void finish() {
@@ -322,7 +348,7 @@ public final class Jpeg2000ImageReader extends ImageReader {
         Jpeg2000Threads threads = param instanceof Jpeg2000ImageReadParam
                 ? ((Jpeg2000ImageReadParam) param).getThreads() : null;
         Jpeg2000Image image = Jpeg2000Decoder.decodeImage(headers, new Jpeg2000Decoder.Options()
-                .reduce(reduce).area(ax0, ay0, ax1, ay1).threads(threads)
+                .reduce(reduce).area(ax0, ay0, ax1, ay1).threads(threads).maxSamples(maxSamples(param))
                 .progress((done, total) -> {
                     processImageProgress(100f * done / total);
                     return !abortRequested();

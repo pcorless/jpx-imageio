@@ -104,4 +104,21 @@ in a micro-benchmark, no change end to end: the pass is memory-bound).
    micro-benchmark of tier-1 alone.
 3. ~~Fuse ICT, level shift and clamp~~: done, about +3%. `Math.rint` stays: it is exact,
    and the level shift no longer shows as a separate cost in the profile worth chasing.
-4. 5/3 vertical pass in column blocks (280 corpus files use 5/3).
+4. ~~5/3 vertical pass in column blocks~~: done (2026-10-20), below.
+
+## 5/3 vertical pass in column blocks (2026-10-20)
+
+The 5/3 vertical pass worked one column at a time, striding the tile width per sample, as the
+9/7 one did before its change. It now takes 16 columns at a time (`columns53`, the integer
+counterpart of `columns97`), each lane getting the reference lifting's operations in its order.
+
+| Files, one thread unless noted | Before | After |
+|---|---|---|
+| the 280 corpus streams that use 5/3 (178 MP) | 23.0 MP/s | 25.4 MP/s (+10%) |
+| synthetic 8000 x 6000 RGB, smooth (28.5 MB lossless), single-tile and 1024 tiles | 7.6 MP/s | 9.05 MP/s (+19%) |
+| the same at 8 threads | 53.8 MP/s | 53.3 MP/s (within noise) |
+
+Bit-identical on all of them and on the fixtures. The gain grows with image size (corpus 5/3
+images are mostly modest), which is where lossless archival, medical and GIS images sit; with
+threads the vertical pass is already spread across cores and the cache effect disappears in the
+noise. A near-incompressible synthetic image (96 MB for 144 MB raw) is MQ-bound and showed +3-6%.

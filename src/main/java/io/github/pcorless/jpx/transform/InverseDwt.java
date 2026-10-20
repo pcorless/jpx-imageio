@@ -19,11 +19,11 @@
  *   9/7: the lifting constants (opj_dwt_alpha/beta/gamma/delta, opj_K, the BUG_WEIRD_TWO_INVK
  *   two_invK), opj_v8dwt_interleave_h/v, opj_v8dwt_decode, opj_v8dwt_decode_step1/2 (scalar);
  *   the level loop of opj_dwt_decode_tile / opj_dwt_decode_tile_97 (H pass on every row, then
- *   V pass on every column, per level). The 9/7 V pass runs 16 columns at a time
- *   (opj_v8dwt_decode_v does 8 for its SIMD lanes), with each lane's float operations in
- *   OpenJPEG's order, so the result is unchanged.
- *   Changed: one lane instead of 8 (or SIMD) columns per call, same float operations in the
- *   same order; no threading.
+ *   V pass on every column, per level). Both V passes run 16 columns at a time
+ *   (opj_v8dwt_decode_v does 8 for its SIMD lanes, opj_idwt53_v PARALLEL_COLS_53 = 8), each
+ *   lane getting the reference lifting's operations in its order, so the result is unchanged.
+ *   Changed: horizontal passes one row (one lane) at a time, vertical passes 16 plain-Java lanes
+ *   instead of 8 SIMD ones, the same operations in the same order.
  *   Algorithm: ITU-T T.800 Annex F.
  */
 /*
@@ -111,6 +111,7 @@ public final class InverseDwt {
             throws JpxException {
         if (numRes <= 1 || w == 0) return;
         int[] mem = new int[maxResolutionSize(res, numRes)];
+        int[] lanes = new int[maxResolutionSize(res, numRes) * LANES];
         int rw = res[0].width(), rh = res[0].height();
         for (int r = 1; r < numRes; r++) {
             int hsn = rw, vsn = rh;
@@ -131,17 +132,18 @@ public final class InverseDwt {
                     };
                 });
                 Parallel.forEach(threads, items(rw, COLUMNS_PER_ITEM), () -> {
-                    int[] m = new int[lh];
+                    int[] ln = new int[lh * LANES];
                     return item -> {
-                        for (int i = item * COLUMNS_PER_ITEM, e = Math.min(lw, i + COLUMNS_PER_ITEM); i < e; i++) {
-                            column53(a, i, w, m, vsn, vdn, vcas, lh);
+                        for (int i = item * COLUMNS_PER_ITEM, e = Math.min(lw, i + COLUMNS_PER_ITEM); i < e; i += LANES) {
+                            columns53(a, i, w, ln, vsn, vdn, vcas, Math.min(LANES, e - i), lh);
                         }
                     };
                 });
                 continue;
             }
             for (int j = 0; j < rh; j++) row53(a, j * w, mem, hsn, hdn, hcas, rw);
-            for (int i = 0; i < rw; i++) column53(a, i, w, mem, vsn, vdn, vcas, rh);
+            // LANES columns at a time, as for 9/7: each row is read and written contiguously
+            for (int i = 0; i < rw; i += LANES) columns53(a, i, w, lanes, vsn, vdn, vcas, Math.min(LANES, rw - i), rh);
         }
     }
 
@@ -151,10 +153,57 @@ public final class InverseDwt {
         System.arraycopy(mem, 0, a, row, rw);
     }
 
-    private static void column53(int[] a, int i, int w, int[] mem, int sn, int dn, int cas, int rh) {
-        interleave(a, i, w, mem, sn, dn, cas);
-        decode1(mem, dn, sn, cas);
-        for (int k = 0; k < rh; k++) a[i + k * w] = mem[k];
+    private static void columns53(int[] a, int i, int w, int[] lanes, int sn, int dn, int cas, int nl, int rh) {
+        interleaveV(a, i, w, lanes, sn, dn, cas, nl);
+        decodeLanes(lanes, dn, sn, cas, nl);
+        for (int k = 0, o = i; k < rh; k++, o += w) System.arraycopy(lanes, k * LANES, a, o, nl);
+    }
+
+    /** opj_dwt_interleave_v over {@code nl} columns: rows into lanes[k * LANES + lane]. */
+    private static void interleaveV(int[] a, int col, int w, int[] lanes, int sn, int dn, int cas, int nl) {
+        int ai = col;
+        for (int i = 0, bi = cas; i < sn; i++, bi += 2, ai += w) System.arraycopy(a, ai, lanes, bi * LANES, nl);
+        for (int i = 0, bi = 1 - cas; i < dn; i++, bi += 2, ai += w) System.arraycopy(a, ai, lanes, bi * LANES, nl);
+    }
+
+    /** decode1 over {@code nl} lanes: the same integer lifting, in the same order, per lane. */
+    private static void decodeLanes(int[] a, int dn, int sn, int cas, int nl) {
+        if (cas == 0) {
+            if (dn > 0 || sn > 1) {
+                for (int i = 0; i < sn; i++) {
+                    int t = 2 * i * LANES, d0 = dLane(i - 1, dn), d1 = dLane(i, dn);
+                    for (int l = 0; l < nl; l++) a[t + l] -= (a[d0 + l] + a[d1 + l] + 2) >> 2;
+                }
+                for (int i = 0; i < dn; i++) {
+                    int t = (2 * i + 1) * LANES, s0 = sLane(i, sn), s1 = sLane(i + 1, sn);
+                    for (int l = 0; l < nl; l++) a[t + l] += (a[s0 + l] + a[s1 + l]) >> 1;
+                }
+            }
+        } else {
+            if (sn == 0 && dn == 1) {
+                for (int l = 0; l < nl; l++) a[l] /= 2;
+            } else {
+                // as decode1: S clamped by dn, D by sn
+                for (int i = 0; i < sn; i++) {
+                    int t = (2 * i + 1) * LANES, s0 = sLane(i, dn), s1 = sLane(i + 1, dn);
+                    for (int l = 0; l < nl; l++) a[t + l] -= (a[s0 + l] + a[s1 + l] + 2) >> 2;
+                }
+                for (int i = 0; i < dn; i++) {
+                    int t = 2 * i * LANES, d0 = dLane(i, sn), d1 = dLane(i - 1, sn);
+                    for (int l = 0; l < nl; l++) a[t + l] += (a[d0 + l] + a[d1 + l]) >> 1;
+                }
+            }
+        }
+    }
+
+    /** Lane offset of sClamp's sample. */
+    private static int sLane(int i, int n) {
+        return (i < 0 ? 0 : i >= n ? 2 * (n - 1) : 2 * i) * LANES;
+    }
+
+    /** Lane offset of dClamp's sample. */
+    private static int dLane(int i, int n) {
+        return (i < 0 ? 1 : i >= n ? 1 + 2 * (n - 1) : 1 + 2 * i) * LANES;
     }
 
     /** Rows of a horizontal pass, and columns of a vertical one, per work item. */
@@ -276,7 +325,7 @@ public final class InverseDwt {
         for (int k = 0, o = i; k < rh; k++, o += w) System.arraycopy(lanes, k * LANES, a, o, nl);
     }
 
-    /** Columns per vertical pass: opj_v8dwt's 8, doubled (no SIMD lanes to match in Java). */
+    /** Columns per vertical pass: OpenJPEG's 8, doubled (no SIMD lanes to match in Java). */
     static final int LANES = 16;
 
     /** opj_v8dwt_interleave_v: rows of {@code nl} columns into lanes[k * LANES + lane]. */

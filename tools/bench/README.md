@@ -9,5 +9,7 @@ Results and method: `docs/PERFORMANCE.md`.
   `java -Xmx8g -cp <jpx-imageio classes or jar>[:jai-imageio jars] JpxBench.java ours <warmupFiles> list.txt > ours.tsv`
   (path, ok|fail|timeout, ms, megapixels).
 - `ab.sh`: one A/B run on a file list, pinned to cores 10-13.
+- `T1Bench.java`: tier-1 (code-block decoding) alone, one thread, N rounds after warm-up, with a
+  checksum of every coefficient: `java -cp <classes> tools/bench/T1Bench.java 3 9 image.j2k`.
 
 Pin runs to cores (`taskset`) and don't run two benchmarks on the same cores at once.

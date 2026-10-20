@@ -200,3 +200,30 @@ is never taken: `DataBuffer.getData` would make the image untrackable and lose J
 acceleration of it for hosts that draw it. Identical output from `read` and `readRaster` on all
 936 files. Left: about 7% of the main thread in the copy, the rest is the decode and allocating
 the destination.
+
+## Tier-1 on large lossless images (2026-10-20)
+
+`tools/bench/T1Bench.java` times `CodeBlockDecoder` alone: the code-blocks of the given files are
+packet-decoded once and kept, then decoded for N rounds on one thread, with a checksum of every
+coefficient that must not change between variants. On the synthetic 8000 x 6000 RGB 5/3 image it
+is stable to about 0.3% between rounds; tier-1 is about 80% of that image's single-thread decode.
+
+| Change | Tier-1 Msamples/s | Kept |
+|---|---|---|
+| baseline | 34.2 | |
+| MQ state tables packed into one int per state (one load per decision) | 34.3 | no: the tables sit in L1 anyway |
+| context passed as an argument, no `curctx` store/load | 35.0-35.5 vs 35.2 | no: within noise |
+| JIT flags: `-XX:MaxInlineSize=100` (renormalize then inlines) | +3% | (flags only, not a code change) |
+| larger `InlineSmallCode` / `FreqInlineSize` | slower | |
+| RENORMD shifting as many bits at once as A needs and CT has (`numberOfLeadingZeros`) | 34.9-35.5 | yes |
+| + DECODE's exchange chosen with masks, one branch left ("renormalise?") | 35.6-35.9 | yes |
+
+Together about +5% on tier-1 and +4% end to end on that image (9.8 -> 10.2 MP/s, one thread);
+bit-identical on the fixtures and on every corpus 5/3 stream plus every 4th corpus file (1,147).
+
+The profile puts most of the MQ time on the line after its decision branches (sampling skid):
+the cost is the decisions themselves, close to coin tosses, so data-dependent branches mispredict.
+OpenJPEG has the same structure in C, where the compiler emits conditional moves. What is left
+is the per-decision dependency chain through A, C and CT; going further means a different MQ
+decoding structure (for instance decoding runs of MPS decisions between renormalisations, as
+fast commercial decoders do), a larger and riskier change than the ones above.

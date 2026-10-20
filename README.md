@@ -78,7 +78,8 @@ mostly 9/7 photos), whole images to samples, OpenJDK 21:
   same corpus at about 105-110 MP/s with its default threads (about 26 MP/s on one), needing about
   6 bytes of heap per sample at the peak: the 5171 x 2923 x 4 largest image reads in a 363 MB heap.
 - Lossless (5/3) images, the norm for archival, medical and GIS imagery, gain most from the
-  cache-friendly wavelet passes: 19% faster on one thread for a smooth 8000 x 6000 RGB.
+  cache-friendly wavelet passes and the tuned MQ decoder: on one thread, a smooth 8000 x 6000 RGB
+  decodes 19% faster from the wavelet change and another 4% from the MQ one.
 - A source region decodes only the tiles it meets, and power-of-two subsampling discards whole
   resolution levels instead of decoding and then shrinking.
 

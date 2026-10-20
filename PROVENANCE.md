@@ -19,7 +19,7 @@ JJ2000 / jai-imageio-jpeg2000 is a black-box oracle only; its source is never co
 
 | File | Origin | Upstream (file @ rev: functions) | Licence | Notes |
 |---|---|---|---|---|
-| `src/main/java/io/github/pcorless/jpx/tier1/MqDecoder.java` | ADAPTED | OpenJPEG `mqc.c`, `mqc_inl.h` @ 6c4a29b0: `mqc_states`, `opj_mqc_init_dec`, `opj_mqc_raw_init_dec`, `opj_mqc_resetstates`, `opj_mqc_setstate`, `opj_mqc_decode_macro`, `opj_mqc_bytein_macro`, `opj_mqc_raw_decode` | BSD-2 | virtual FF FF instead of writing past the buffer; state pointers → indices |
+| `src/main/java/io/github/pcorless/jpx/tier1/MqDecoder.java` | ADAPTED | OpenJPEG `mqc.c`, `mqc_inl.h` @ 6c4a29b0: `mqc_states`, `opj_mqc_init_dec`, `opj_mqc_raw_init_dec`, `opj_mqc_resetstates`, `opj_mqc_setstate`, `opj_mqc_decode_macro`, `opj_mqc_bytein_macro`, `opj_mqc_raw_decode` | BSD-2 | virtual FF FF instead of writing past the buffer; state pointers → indices; DECODE exchange as masks, RENORMD several bits at a time (same results) |
 | `src/main/java/io/github/pcorless/jpx/tier2/PacketBitReader.java` | PORTED | OpenJPEG `bio.c` @ 6c4a29b0: `opj_bio_init_dec`, `opj_bio_bytein`, `opj_bio_getbit`, `opj_bio_read`, `opj_bio_inalign`, `opj_bio_numbytes` | BSD-2 | adds an overrun flag |
 | `src/main/java/io/github/pcorless/jpx/tier2/TagTree.java` | PORTED | OpenJPEG `tgt.c` @ 6c4a29b0: `opj_tgt_create`, `opj_tgt_reset`, `opj_tgt_decode` | BSD-2 | nodes as parallel arrays |
 | `src/main/java/io/github/pcorless/jpx/JpxException.java` | ORIGINAL | | Apache-2.0 | |

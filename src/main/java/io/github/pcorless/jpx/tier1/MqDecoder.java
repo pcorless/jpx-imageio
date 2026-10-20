@@ -20,6 +20,8 @@
  *   Changed: the C writes an artificial FF FF marker past the end of the segment (and restores
  *   the two bytes afterwards); here reads at or past the end return 0xFF instead, so the input
  *   array is never modified and needs no slack. State pointers became indices into four tables.
+ *   DECODE picks the conditional exchange with masks rather than branches, and RENORMD shifts as
+ *   many bits at once as A needs and CT has; both give the C's results (PERFORMANCE.md, tier-1).
  *   Algorithm: ITU-T T.800 Annex C.3.
  */
 /*
@@ -242,54 +244,53 @@ public final class MqDecoder {
 
     /** opj_mqc_renormd_macro: RENORMD, T.800 C.3.3. */
     private void renormalize() {
+        // RENORMD shifts one bit at a time until A >= 0x8000, reading a byte whenever CT runs out;
+        // shift as many bits at once as A needs and CT has (A is a 16-bit register here)
+        int need = Integer.numberOfLeadingZeros(a) - 16;
         do {
             if (ct == 0) {
                 byteIn();
             }
-            a <<= 1;
-            c <<= 1;
-            ct--;
-        } while (a < 0x8000);
+            int k = Math.min(need, ct);
+            a <<= k;
+            c <<= k;
+            ct -= k;
+            need -= k;
+        } while (need > 0);
     }
 
-    /** opj_mqc_decode_macro: DECODE, T.800 C.3.2, in the active context. Returns 0 or 1. */
+    /**
+     * opj_mqc_decode_macro: DECODE, T.800 C.3.2, in the active context. Returns 0 or 1.
+     * <p>
+     * The same decision as the C, with its inner branches (LPS or MPS exchange) computed as masks:
+     * an MQ decision is close to a coin toss, so those branches mispredict, and the JIT doesn't turn
+     * them into conditional moves as a C compiler does. Only "is a renormalisation due" stays a branch.
+     * <ul>
+     *   <li>{@code lps}: C's top half is below Qe, the LPS sub-interval (A becomes Qe, C stays);</li>
+     *   <li>otherwise C drops by Qe and A keeps A - Qe, renormalising when that is below 0x8000;</li>
+     *   <li>when a renormalisation is due, the conditional exchange: {@code A - Qe < Qe} swaps the
+     *       symbol of the sub-interval taken, which becomes MPS/LPS and picks NMPS/NLPS;</li>
+     *   <li>without one, the MPS and the state is kept.</li>
+     * </ul>
+     */
     public int decode() {
         int[] ctx = ctxs;
         int cx = curctx;
         int state = ctx[cx];
         int qe = QE[state];
-        int d;
-        a -= qe;
-        // C is a 32-bit unsigned register in the C code; compare its top half unsigned.
-        if ((c >>> 16) < qe) {
-            // LPS exchange
-            if (a < qe) {
-                a = qe;
-                d = MPS[state];
-                ctx[cx] = NMPS[state];
-            } else {
-                a = qe;
-                d = 1 - MPS[state];
-                ctx[cx] = NLPS[state];
-            }
+        int mps = MPS[state];
+        int sub = a - qe;
+        int lps = ((c >>> 16) - qe) >> 31;          // -1 when the LPS sub-interval is taken
+        int exch = (sub - qe) >> 31;                // -1 when A - Qe < Qe (the exchange)
+        a = (qe & lps) | (sub & ~lps);
+        c -= (qe << 16) & ~lps;
+        if (lps != 0 || (sub & 0x8000) == 0) {
+            int lpsOut = (lps ^ exch) & 1;          // the decoded symbol is the LPS
+            ctx[cx] = lpsOut != 0 ? NLPS[state] : NMPS[state];
             renormalize();
-        } else {
-            c -= qe << 16;
-            if ((a & 0x8000) == 0) {
-                // MPS exchange
-                if (a < qe) {
-                    d = 1 - MPS[state];
-                    ctx[cx] = NLPS[state];
-                } else {
-                    d = MPS[state];
-                    ctx[cx] = NMPS[state];
-                }
-                renormalize();
-            } else {
-                d = MPS[state];
-            }
+            return mps ^ lpsOut;
         }
-        return d;
+        return mps;
     }
 
     /** opj_mqc_raw_decode: one raw bit (selective arithmetic coding bypass), T.800 D.6. */

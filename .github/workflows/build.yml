@@ -1,0 +1,41 @@
+# Clean-machine build on every push and pull request: Maven on the lowest supported JDK (11) and
+# the current LTS (21), and the Gradle build (Gradle 9 runs on 17+; it compiles and tests with
+# its Java 11 toolchain).
+name: build
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  maven:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: [ '11', '21' ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+      - run: mvn -B -ntp verify
+
+  gradle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # 11 for the toolchain, 21 (listed last, so JAVA_HOME) to run Gradle
+          java-version: |
+            11
+            21
+          cache: gradle
+      - run: ./gradlew build --no-daemon

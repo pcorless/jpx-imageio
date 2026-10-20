@@ -8,6 +8,24 @@ fixtures and on 3,742 of 3,744 JPEG 2000 streams taken from real PDFs (the other
 reader meets `docs/IMAGEIO-CONTRACT.md`. Single-threaded it runs at about 0.8x OpenJPEG; with its default threads about 2x OpenJPEG's own
 threaded decode (`docs/PERFORMANCE.md`). Hostile input fails with a `JpxException` (an `IOException`); a mutation fuzz of the fixtures found nothing else escaping, but no coverage-guided fuzzing yet.
 
+## Get it
+
+Maven:
+
+```xml
+<dependency>
+    <groupId>com.github.pcorless</groupId>
+    <artifactId>jpx-imageio</artifactId>
+    <version>x.y.z</version>
+</dependency>
+```
+
+Gradle:
+
+```groovy
+implementation 'com.github.pcorless:jpx-imageio:x.y.z'
+```
+
 ## Use
 
 Put the jar on the class path (or module path: module `io.github.pcorless.jpx`) and ImageIO finds it:

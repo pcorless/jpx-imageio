@@ -46,6 +46,8 @@ BufferedImage image = ImageIO.read(new File("photo.jp2"));
   channels) is refused before anything is allocated, as a JPEG 2000 header of a few hundred bytes
   can declare billions. `-Dio.github.pcorless.jpx.maxSamples=N`, `Jpeg2000ImageReadParam.setMaxSamples`
   or `Jpeg2000Decoder.Options.maxSamples` change it.
+- Reading from a stream, `ImageIO.setUseCache(false)` keeps ImageIO from first copying it to a
+  temporary file (about 5% faster on the corpus); this reader keeps the stream's bytes in memory either way.
 - Threads: on by default (a shared pool of up to `min(cores, 8)` threads, the caller included).
   `-Dio.github.pcorless.jpx.parallelism=1` turns them off; `Jpeg2000Threads.setDefaults(...)` or a
   `Jpeg2000ImageReadParam` choose per process or per read. Output never depends on the count.
@@ -73,8 +75,8 @@ mostly 9/7 photos), whole images to samples, OpenJDK 21:
   5/3 image at 8 threads, 70 MP/s against 43 single-tile, and 51 against 48 with 1024 x 1024 tiles.
 - Large tiled images scale best (6.8x on 16 cores); output is bit-identical whatever the thread count.
 - Through ImageIO (`ImageIO.read` to a `BufferedImage`, all format work included) it reads the
-  same corpus at about 55 MP/s with its default threads, needing about 6 bytes of heap per sample
-  at the peak: the 5171 x 2923 x 4 largest image reads in a 363 MB heap.
+  same corpus at about 105-110 MP/s with its default threads (about 26 MP/s on one), needing about
+  6 bytes of heap per sample at the peak: the 5171 x 2923 x 4 largest image reads in a 363 MB heap.
 - Lossless (5/3) images, the norm for archival, medical and GIS imagery, gain most from the
   cache-friendly wavelet passes: 19% faster on one thread for a smooth 8000 x 6000 RGB.
 - A source region decodes only the tiles it meets, and power-of-two subsampling discards whole

@@ -175,3 +175,28 @@ Large lossless images are the other way round: synthetic 8000 x 6000 RGB 5/3, 1 
 OpenJPEG 14.7 / 69.6 MP/s single-tile and 14.1 / 51.3 with 1024 x 1024 tiles; jpx-imageio
 9.3 / 42.5 and 9.5 / 48.3. Code-blocks dominate there and OpenJPEG threads them well; it stays
 ahead at 8 threads, 1.6x single-tile and about even tiled.
+
+## ImageIO reads: rows threaded, and the 55 MP/s figure corrected (2026-10-20)
+
+The "about 55 MP/s through ImageIO" in the previous two sections was the harness, not the reader:
+it ran two `System.gc()` before every file to measure heap, and with an 8 GB heap G1 then gives
+memory back, so each large decode paid to fault it in again. Timed alone (`RB`-style: files in
+memory, 150 warm-up files, no GC calls), every 4th corpus file, CPUs 0-15, 8 threads:
+
+| Path | Before | After |
+|---|---|---|
+| `Jpeg2000Decoder.decodeImage` | 128.5 MP/s | 127.7 |
+| reader on a `MemoryCacheImageInputStream` | 100.8 | 111.5 |
+| `ImageIO.read` defaults (disk cache) | 93.3 | 105.9 |
+| `readRaster` | 97.9 | 109.8 |
+| reader, one thread | | 26.3 (decoder 28.5) |
+
+What remained between reader and decoder was the copy into the raster (about a quarter of the
+main thread): `WritableRaster.setSamples` per row and band goes through the sample model pixel by
+pixel. The copy now builds pixel-interleaved rows and hands each to `setDataElements` (Java2D's
+own fast path) for the byte and ushort interleaved rasters ImageIO makes, with rows spread over the
+decode's threads; other rasters still go through `setSamples`, on one thread. The backing array
+is never taken: `DataBuffer.getData` would make the image untrackable and lose Java2D's
+acceleration of it for hosts that draw it. Identical output from `read` and `readRaster` on all
+936 files. Left: about 7% of the main thread in the copy, the rest is the decode and allocating
+the destination.

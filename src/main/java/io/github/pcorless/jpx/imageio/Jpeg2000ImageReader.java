@@ -24,6 +24,7 @@ import io.github.pcorless.jpx.Jpeg2000Image;
 import io.github.pcorless.jpx.Jpeg2000Threads;
 import io.github.pcorless.jpx.JpxException;
 import io.github.pcorless.jpx.codestream.Codestream;
+import io.github.pcorless.jpx.internal.Parallel;
 
 import javax.imageio.IIOException;
 import javax.imageio.ImageReadParam;
@@ -35,6 +36,7 @@ import javax.imageio.stream.ImageInputStream;
 import java.awt.Rectangle;
 import java.awt.image.BufferedImage;
 import java.awt.image.ColorModel;
+import java.awt.image.DataBuffer;
 import java.awt.image.PixelInterleavedSampleModel;
 import java.awt.image.Raster;
 import java.awt.image.WritableRaster;
@@ -321,7 +323,7 @@ public final class Jpeg2000ImageReader extends ImageReader {
         }
     }
 
-    private BufferedImage image(Decoded decoded, int w, int h) {
+    private BufferedImage image(Decoded decoded, int w, int h) throws JpxException {
         ColorModel cm = layout.colorModel;
         WritableRaster r = cm.createCompatibleWritableRaster(w, h);
         int[] bands = new int[layout.channels];
@@ -361,20 +363,33 @@ public final class Jpeg2000ImageReader extends ImageReader {
         // the area on the reduced grid of an unsubsampled component
         int rw = ceilDivPow2(ax1, reduce) - ceilDivPow2(ax0, reduce);
         int rh = ceilDivPow2(ay1, reduce) - ceilDivPow2(ay0, reduce);
-        return new Decoded(image.components.clone(), outW, outH, rsx, rsy, rw, rh);
+        return new Decoded(image.components.clone(), outW, outH, rsx, rsy, rw, rh,
+                threads != null ? threads : Jpeg2000Threads.defaults());
     }
 
     /**
      * The decoded components, written into raster bands row by row. There used to be a full
      * {@code int[]} plane per channel between the two: 4 more bytes a sample, alive alongside the
      * decoder's own output and the destination, about 9 bytes a sample at the peak of an 8 bit read.
-     * Each component is let go as soon as the last band that needs it is written.
+     * <p>
+     * A destination with one data element per band (the byte and ushort interleaved rasters
+     * ImageIO makes) gets whole pixel-interleaved rows through {@code setDataElements}, Java2D's
+     * own fast path; anything else goes band by band through {@code setSamples}. The backing array
+     * is never taken, which would make the image untrackable and lose Java2D's acceleration of it.
+     * Rows are spread over the decode's threads.
      */
     private final class Decoded {
+        /** Output rows per work item. */
+        private static final int ROWS_PER_ITEM = 32;
+        /** Smallest output (samples) worth spreading over threads. */
+        private static final long PARALLEL_MIN_SAMPLES = 128 * 128 * 3;
+
         private final Jpeg2000Decoder.Component[] components;
         private final int outW, outH, rsx, rsy, rw, rh;
+        private final Jpeg2000Threads threads;
 
-        Decoded(Jpeg2000Decoder.Component[] components, int outW, int outH, int rsx, int rsy, int rw, int rh) {
+        Decoded(Jpeg2000Decoder.Component[] components, int outW, int outH, int rsx, int rsy, int rw, int rh,
+                Jpeg2000Threads threads) {
             this.components = components;
             this.outW = outW;
             this.outH = outH;
@@ -382,34 +397,65 @@ public final class Jpeg2000ImageReader extends ImageReader {
             this.rsy = rsy;
             this.rw = rw;
             this.rh = rh;
+            this.threads = threads;
         }
 
         /** Writes {@code channels[i]} into band {@code bands[i]} of {@code r}, at {@code (x0, y0)}. */
-        void copy(int[] channels, WritableRaster r, int x0, int y0, int[] bands) {
-            int[] uses = new int[components.length];
-            for (int c : channels) uses[c]++;
-            int[] row = new int[outW];
-            int[] xs = new int[outW];
-            for (int i = 0; i < channels.length; i++) {
+        void copy(int[] channels, WritableRaster r, int x0, int y0, int[] bands) throws JpxException {
+            int n = channels.length;
+            // per channel: the component, the level shift of a signed one, and the column of each
+            // output x (null when the component lines up with the output)
+            Jpeg2000Decoder.Component[] k = new Jpeg2000Decoder.Component[n];
+            int[] shift = new int[n];
+            int[][] xs = new int[n][];
+            for (int i = 0; i < n; i++) {
                 int c = channels[i];
-                Jpeg2000Decoder.Component k = components[c];
-                // the decoded component on the output grid: whole rows when they line up
-                boolean direct = rsx == 1 && k.width == rw && k.width == outW;
-                if (!direct) {
-                    for (int x = 0; x < outW; x++) xs[x] = index((long) x * rsx, k.width, rw);
+                k[i] = components[c];
+                shift[i] = layout.stored(c, 0);
+                if (!(rsx == 1 && k[i].width == rw && k[i].width == outW)) {
+                    xs[i] = new int[outW];
+                    for (int x = 0; x < outW; x++) xs[i][x] = index((long) x * rsx, k[i].width, rw);
                 }
-                for (int y = 0; y < outH; y++) {
-                    int from = index((long) y * rsy, k.height, rh) * k.width;
-                    if (direct) {
-                        System.arraycopy(k.samples, from, row, 0, outW);
-                        for (int x = 0; x < outW; x++) row[x] = layout.stored(c, row[x]);
-                    } else {
-                        for (int x = 0; x < outW; x++) row[x] = layout.stored(c, k.samples[from + xs[x]]);
-                    }
-                    r.setSamples(x0, y0 + y, outW, 1, bands[i], row);
-                }
-                if (--uses[c] == 0) components[c] = null;
             }
+            int transfer = r.getTransferType();
+            boolean interleaved = r.getNumDataElements() == n && r.getNumBands() == n
+                    && (transfer == DataBuffer.TYPE_BYTE || transfer == DataBuffer.TYPE_USHORT);
+            for (int i = 0; interleaved && i < n; i++) interleaved = bands[i] == i;
+            final boolean packed = interleaved;
+            Jpeg2000Threads t = packed && Parallel.worthIt(threads, (long) outW * outH * n >= PARALLEL_MIN_SAMPLES)
+                    ? threads : Jpeg2000Threads.NONE;
+            Parallel.forEach(t, (outH + ROWS_PER_ITEM - 1) / ROWS_PER_ITEM, () -> {
+                byte[] bytes = packed && transfer == DataBuffer.TYPE_BYTE ? new byte[outW * n] : null;
+                short[] shorts = packed && transfer == DataBuffer.TYPE_USHORT ? new short[outW * n] : null;
+                int[] row = packed ? null : new int[outW];
+                return item -> {
+                    for (int y = item * ROWS_PER_ITEM, e = Math.min(outH, y + ROWS_PER_ITEM); y < e; y++) {
+                        for (int i = 0; i < n; i++) {
+                            int[] samples = k[i].samples;
+                            int from = index((long) y * rsy, k[i].height, rh) * k[i].width;
+                            int add = shift[i];
+                            int[] col = xs[i];
+                            if (bytes != null) {
+                                for (int x = 0, o = i; x < outW; x++, o += n) {
+                                    bytes[o] = (byte) (samples[col == null ? from + x : from + col[x]] + add);
+                                }
+                            } else if (shorts != null) {
+                                for (int x = 0, o = i; x < outW; x++, o += n) {
+                                    shorts[o] = (short) (samples[col == null ? from + x : from + col[x]] + add);
+                                }
+                            } else {
+                                for (int x = 0; x < outW; x++) {
+                                    row[x] = samples[col == null ? from + x : from + col[x]] + add;
+                                }
+                                r.setSamples(x0, y0 + y, outW, 1, bands[i], row);
+                            }
+                        }
+                        if (bytes != null) r.setDataElements(x0, y0 + y, outW, 1, bytes);
+                        else if (shorts != null) r.setDataElements(x0, y0 + y, outW, 1, shorts);
+                    }
+                };
+            });
+            for (int c : channels) components[c] = null;
         }
     }
 

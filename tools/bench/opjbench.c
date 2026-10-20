@@ -60,7 +60,7 @@ static int decode(const unsigned char *data, size_t len) {
     opj_dparameters_t p;
     opj_set_default_decoder_parameters(&p);
     opj_setup_decoder(codec, &p);
-    opj_codec_set_threads(codec, threads);
+    if (!opj_codec_set_threads(codec, threads) && threads > 1) { fprintf(stderr, "set_threads(%d) failed\n", threads); exit(2); }
     opj_stream_t *s = opj_stream_default_create(OPJ_TRUE);
     opj_stream_set_user_data(s, &m, NULL);
     opj_stream_set_user_data_length(s, len);

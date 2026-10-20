@@ -122,3 +122,56 @@ Bit-identical on all of them and on the fixtures. The gain grows with image size
 images are mostly modest), which is where lossless archival, medical and GIS images sit; with
 threads the vertical pass is already spread across cores and the cache effect disappears in the
 noise. A near-incompressible synthetic image (96 MB for 144 MB raw) is MQ-bound and showed +3-6%.
+
+## ImageIO reads without the per-channel planes (2026-10-20)
+
+`Jpeg2000ImageReader` copied the decoded components into a full `int[]` plane per channel
+(stored values, subsampled) and then into the destination raster: three copies alive at once,
+about 9-10 bytes a sample at the peak of an 8-bit read. It now writes each output row straight
+from the component into the raster through one reusable row buffer, and lets a component go
+once the last band that needs it is written.
+
+Smallest `-Xmx` (SerialGC, one thread, 16 MB steps) for `ImageReader.read`:
+
+| Image | Before | After |
+|---|---|---|
+| synthetic 8000 x 6000 RGB 5/3, single tile | 1402 MB | 867 MB (-38%) |
+| the same, 1024 x 1024 tiles | 1402 MB | 851 MB (-39%) |
+| largest corpus stream (5171 x 2923 x 4, 9/7) | 615 MB | 363 MB (-41%) |
+| second largest (9/7) | 520 MB | 300 MB (-42%) |
+| third largest (9/7) | 426 MB | 426 MB |
+
+The third is bound by the decode itself (the 9/7 tile's float buffers alongside the integer
+output of the colour transform), not by the copy. One fewer pass over the samples also makes
+reads faster: every 4th corpus file (936), default threads, `read` 46.8 -> 57.4 MP/s (+23%),
+`readRaster` 48.7 -> 57.2 MP/s. Identical output from both on all 936 files and the fixtures.
+
+## README figures re-measured (2026-10-20, commit after eb2e010)
+
+Same method as the Threads table: every 4th corpus file (936), JVM on CPUs 0-15, decoder threads
+set by `-Dio.github.pcorless.jpx.parallelism`. `JpxBench` (one decode thread): 28.7 / 29.0 MP/s
+(was 28.7). Eight threads: 128.9 / 129.0 MP/s (was 123.2). Through ImageIO `read` with the reader
+change above: 55.1 / 54.2 MP/s at 8 threads. Pinning the whole JVM to one core (GC included) gives
+about 27 MP/s for one decode thread, so keep the 0-15 pinning when comparing.
+
+## OpenJPEG's threaded decode, double-checked (2026-10-20)
+
+`opjbench` now exits if `opj_codec_set_threads` fails (it doesn't: libopenjp2 is built with
+`OPJ_USE_THREAD=ON`). Every 4th corpus file, CPUs 0-15, MP/s:
+
+| Images | jpx-imageio 1 / 8 threads | OpenJPEG Release 1 / 8 threads |
+|---|---|---|
+| < 0.1 MP (495 files) | 21.0 / 28.8 (1.4x) | 29.3 / 23.5 (0.8x) |
+| 0.1-1 MP (228) | 31.0 / 105.7 (3.4x) | 50.4 / 58.0 (1.2x) |
+| 1-4 MP (150) | 22.3 / 116.8 (5.2x) | 35.8 / 51.9 (1.4x) |
+| > 4 MP (63) | 35.4 / 149.0 (4.2x) | 52.9 / 70.5 (1.3x) |
+
+OpenJPEG overall: 44.8 / 52.0 / 56.6 / 60.1 / 47.6 MP/s at 1 / 2 / 4 / 8 / 16 threads, matching
+the earlier 44.4 and 60.7. Its own `opj_decompress -threads 8` agrees (largest stream 0.99 s ->
+0.88 s, 164% CPU). On these lossy 9/7 images its SIMD wavelet is already fast and what it doesn't
+thread dominates (not profiled; the scaling is what was measured).
+
+Large lossless images are the other way round: synthetic 8000 x 6000 RGB 5/3, 1 / 8 threads,
+OpenJPEG 14.7 / 69.6 MP/s single-tile and 14.1 / 51.3 with 1024 x 1024 tiles; jpx-imageio
+9.3 / 42.5 and 9.5 / 48.3. Code-blocks dominate there and OpenJPEG threads them well; it stays
+ahead at 8 threads, 1.6x single-tile and about even tiled.

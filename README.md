@@ -59,16 +59,24 @@ mostly 9/7 photos), whole images to samples, OpenJDK 21:
 
 | Decoder | One thread | Threaded |
 |---|---|---|
-| **jpx-imageio** | **28.7 MP/s** | **123 MP/s** (8 threads, 4.3x) |
+| **jpx-imageio** | **28.9 MP/s** | **129 MP/s** (8 threads, 4.5x) |
 | OpenJPEG 2.5.4, stock Release build (`-O3 -ffast-math`) | 44.4 MP/s | 60.7 MP/s (8 threads) |
 | JJ2000 (jai-imageio-jpeg2000 1.4.0) | 2.6 MP/s | n/a |
 
 - About 10x faster than JJ2000, the usual pure-Java choice, on the files both decode. JJ2000 also
   times out or fails on files this reader decodes.
-- Single-threaded it runs at about 0.65-0.8x native OpenJPEG; with its default threads it is about
-  2x OpenJPEG's own threaded decode, because the inverse wavelet, code-blocks and colour transform
-  all run in parallel, within a tile as well as across tiles.
+- Single-threaded it runs at about 0.65-0.8x native OpenJPEG. With threads, on these mostly lossy
+  PDF images it is about 2x OpenJPEG's own threaded decode: OpenJPEG gains only 1.3-1.4x from 8
+  threads here, even on images over 4 MP, where jpx-imageio gains 4-5x by running the inverse
+  wavelet, code-blocks and colour transform in parallel, within a tile as well as across tiles.
+- On large lossless images OpenJPEG's threading pays off and it stays ahead: on an 8000 x 6000 RGB
+  5/3 image at 8 threads, 70 MP/s against 43 single-tile, and 51 against 48 with 1024 x 1024 tiles.
 - Large tiled images scale best (6.8x on 16 cores); output is bit-identical whatever the thread count.
+- Through ImageIO (`ImageIO.read` to a `BufferedImage`, all format work included) it reads the
+  same corpus at about 55 MP/s with its default threads, needing about 6 bytes of heap per sample
+  at the peak: the 5171 x 2923 x 4 largest image reads in a 363 MB heap.
+- Lossless (5/3) images, the norm for archival, medical and GIS imagery, gain most from the
+  cache-friendly wavelet passes: 19% faster on one thread for a smooth 8000 x 6000 RGB.
 - A source region decodes only the tiles it meets, and power-of-two subsampling discards whole
   resolution levels instead of decoding and then shrinking.
 

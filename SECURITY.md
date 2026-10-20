@@ -45,8 +45,9 @@ Anything a crafted input can make the decoder do beyond failing cleanly, for exa
 - **Large images within the limit.** A decode is refused before allocating anything when its output,
   or one tile, would hold more than 2^28 samples (`-Dio.github.pcorless.jpx.maxSamples`,
   `Jpeg2000ImageReadParam.setMaxSamples`, `Jpeg2000Decoder.Options.maxSamples`). Below that, an image
-  can still need more heap than a host gives it; a read through ImageIO holds about 9 bytes per
-  sample at its peak. Hosts that decode untrusted images on a small heap should lower the limit.
+  can still need more heap than a host gives it; a read through ImageIO needs about 5-6 bytes
+  per sample of heap for a 5/3 image and somewhat more for 9/7 at its peak (an 8-bit 2^28-sample
+  read, about 1.5 GB). Hosts that decode untrusted images on a small heap should lower the limit.
 - **The JDK itself.** ICC profiles are handed to the JDK's colour management (LittleCMS) and
   images are built with `java.awt.image`; vulnerabilities in those belong to the JDK vendor. A
   profile that makes jpx-imageio throw something other than `IOException` does count, as above.

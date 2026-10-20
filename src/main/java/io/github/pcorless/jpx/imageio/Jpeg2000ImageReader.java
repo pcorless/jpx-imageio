@@ -241,14 +241,14 @@ public final class Jpeg2000ImageReader extends ImageReader {
         }
         clearAbortRequest();
         processImageStarted(imageIndex);
-        int[][] planes = decode(param, src, dst.width, dst.height);
+        Decoded decoded = decode(param, src, dst.width, dst.height);
         int[] offsets = new int[bands];
         for (int b = 0; b < bands; b++) offsets[b] = b;
         WritableRaster raster = Raster.createWritableRaster(new PixelInterleavedSampleModel(layout.dataType,
                 dst.width, dst.height, bands, dst.width * bands, offsets), null);
-        for (int b = 0; b < bands; b++) {
-            raster.setSamples(0, 0, dst.width, dst.height, b, planes[sourceBands == null ? b : sourceBands[b]]);
-        }
+        int[] channels = new int[bands];
+        for (int b = 0; b < bands; b++) channels[b] = sourceBands == null ? b : sourceBands[b];
+        decoded.copy(channels, raster, 0, 0, offsets);
         finish();
         return raster;
     }
@@ -268,17 +268,18 @@ public final class Jpeg2000ImageReader extends ImageReader {
         if (bandCopy) checkReadParamBandSettings(param, layout.channels, out.getNumBands());
         clearAbortRequest();
         processImageStarted(imageIndex);
-        int[][] planes = decode(param, src, dst.width, dst.height);
+        Decoded decoded = decode(param, src, dst.width, dst.height);
         if (bandCopy) {
             int n = sourceBands == null ? Math.min(layout.channels, out.getNumBands()) : sourceBands.length;
+            int[] channels = new int[n], bands = new int[n];
             for (int i = 0; i < n; i++) {
-                int channel = layout.displayOrder[sourceBands == null ? i : sourceBands[i]];
-                int band = destBands == null ? i : destBands[i];
-                out.setSamples(dst.x, dst.y, dst.width, dst.height, band, planes[channel]);
+                channels[i] = layout.displayOrder[sourceBands == null ? i : sourceBands[i]];
+                bands[i] = destBands == null ? i : destBands[i];
             }
+            decoded.copy(channels, out, dst.x, dst.y, bands);
         } else {
             // a destination of another type: convert through the image's own colour model
-            BufferedImage tmp = image(planes, dst.width, dst.height);
+            BufferedImage tmp = image(decoded, dst.width, dst.height);
             int[] row = new int[dst.width];
             for (int y = 0; y < dst.height; y++) {
                 tmp.getRGB(0, y, dst.width, 1, row, 0, dst.width);
@@ -320,18 +321,20 @@ public final class Jpeg2000ImageReader extends ImageReader {
         }
     }
 
-    private BufferedImage image(int[][] planes, int w, int h) {
+    private BufferedImage image(Decoded decoded, int w, int h) {
         ColorModel cm = layout.colorModel;
         WritableRaster r = cm.createCompatibleWritableRaster(w, h);
-        for (int b = 0; b < layout.channels; b++) r.setSamples(0, 0, w, h, b, planes[layout.displayOrder[b]]);
+        int[] bands = new int[layout.channels];
+        for (int b = 0; b < bands.length; b++) bands[b] = b;
+        decoded.copy(layout.displayOrder, r, 0, 0, bands);
         return new BufferedImage(cm, r, cm.isAlphaPremultiplied(), new Hashtable<>());
     }
 
     /**
-     * Decodes the source region and returns one plane per channel (in channel order) of
+     * Decodes the source region; {@link Decoded#copy} then writes its channels into bands as
      * {@code outW x outH} stored sample values, already subsampled.
      */
-    private int[][] decode(ImageReadParam param, Rectangle src, int outW, int outH) throws IOException {
+    private Decoded decode(ImageReadParam param, Rectangle src, int outW, int outH) throws IOException {
         int sx = param.getSourceXSubsampling(), sy = param.getSourceYSubsampling();
         // discard resolution levels for the power-of-two part of the subsampling, when the
         // region starts on that grid
@@ -358,19 +361,56 @@ public final class Jpeg2000ImageReader extends ImageReader {
         // the area on the reduced grid of an unsubsampled component
         int rw = ceilDivPow2(ax1, reduce) - ceilDivPow2(ax0, reduce);
         int rh = ceilDivPow2(ay1, reduce) - ceilDivPow2(ay0, reduce);
-        int[][] planes = new int[layout.channels][];
-        for (int c = 0; c < layout.channels; c++) {
-            Jpeg2000Decoder.Component k = image.components[c];
-            int[] plane = new int[outW * outH];
-            int[] xs = new int[outW];
-            for (int x = 0; x < outW; x++) xs[x] = index((long) x * rsx, k.width, rw);
-            for (int y = 0; y < outH; y++) {
-                int row = index((long) y * rsy, k.height, rh) * k.width;
-                for (int x = 0; x < outW; x++) plane[y * outW + x] = layout.stored(c, k.samples[row + xs[x]]);
-            }
-            planes[c] = plane;
+        return new Decoded(image.components.clone(), outW, outH, rsx, rsy, rw, rh);
+    }
+
+    /**
+     * The decoded components, written into raster bands row by row. There used to be a full
+     * {@code int[]} plane per channel between the two: 4 more bytes a sample, alive alongside the
+     * decoder's own output and the destination, about 9 bytes a sample at the peak of an 8 bit read.
+     * Each component is let go as soon as the last band that needs it is written.
+     */
+    private final class Decoded {
+        private final Jpeg2000Decoder.Component[] components;
+        private final int outW, outH, rsx, rsy, rw, rh;
+
+        Decoded(Jpeg2000Decoder.Component[] components, int outW, int outH, int rsx, int rsy, int rw, int rh) {
+            this.components = components;
+            this.outW = outW;
+            this.outH = outH;
+            this.rsx = rsx;
+            this.rsy = rsy;
+            this.rw = rw;
+            this.rh = rh;
         }
-        return planes;
+
+        /** Writes {@code channels[i]} into band {@code bands[i]} of {@code r}, at {@code (x0, y0)}. */
+        void copy(int[] channels, WritableRaster r, int x0, int y0, int[] bands) {
+            int[] uses = new int[components.length];
+            for (int c : channels) uses[c]++;
+            int[] row = new int[outW];
+            int[] xs = new int[outW];
+            for (int i = 0; i < channels.length; i++) {
+                int c = channels[i];
+                Jpeg2000Decoder.Component k = components[c];
+                // the decoded component on the output grid: whole rows when they line up
+                boolean direct = rsx == 1 && k.width == rw && k.width == outW;
+                if (!direct) {
+                    for (int x = 0; x < outW; x++) xs[x] = index((long) x * rsx, k.width, rw);
+                }
+                for (int y = 0; y < outH; y++) {
+                    int from = index((long) y * rsy, k.height, rh) * k.width;
+                    if (direct) {
+                        System.arraycopy(k.samples, from, row, 0, outW);
+                        for (int x = 0; x < outW; x++) row[x] = layout.stored(c, row[x]);
+                    } else {
+                        for (int x = 0; x < outW; x++) row[x] = layout.stored(c, k.samples[from + xs[x]]);
+                    }
+                    r.setSamples(x0, y0 + y, outW, 1, bands[i], row);
+                }
+                if (--uses[c] == 0) components[c] = null;
+            }
+        }
     }
 
     /** Position {@code p} on a grid of {@code full} points, in a component of {@code size}. */

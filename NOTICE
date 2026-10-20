@@ -29,6 +29,3 @@ version 2.5.4 (6c4a29b0), under the 2-clause BSD licence (see licenses/OpenJPEG-
 The per-file copyright lines of each OpenJPEG source a file is derived from are kept in that
 file's header. PROVENANCE.md lists every derived file. The list above is the union of the
 copyright lines of the OpenJPEG decoder sources the port draws on.
-
-This product may include software derived from pdf.js (https://github.com/mozilla/pdf.js),
-Copyright 2012 Mozilla Foundation, under the Apache License, Version 2.0.

@@ -225,8 +225,8 @@ public final class TileDecoder {
 
     /**
      * opj_mct_decode_real then opj_tcd_dc_level_shift_decode for components 0-2, fused: each
-     * sample's RGB is computed as InverseMct.decodeIrreversible computes it, then rounded,
-     * shifted and clamped as dcLevelShift does.
+     * sample's RGB is computed with opj_mct_decode_real's constants and operation order, then
+     * rounded, shifted and clamped as dcLevelShift does.
      */
     private static int[][] ictLevelShift(Codestream cs, TileLayout tile, float[][] floats, Jpeg2000Threads threads)
             throws JpxException {

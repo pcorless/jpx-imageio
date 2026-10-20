@@ -14,9 +14,9 @@
  * limitations under the License.
  *
  * Provenance: PORTED from OpenJPEG src/lib/openjp2/mct.c @ 6c4a29b0 (BSD-2):
- *   opj_mct_decode (scalar), opj_mct_decode_real (scalar; same constants and operation order
- *   as its SSE path).
- *   Algorithm: ITU-T T.800 G.2 (RCT) and G.3 (ICT).
+ *   opj_mct_decode (scalar). opj_mct_decode_real (the ICT) is fused with the level shift in
+ *   TileDecoder.ictLevelShift.
+ *   Algorithm: ITU-T T.800 G.2 (RCT).
  */
 /*
  * The copyright in this software is being made available under the 2-clauses
@@ -58,18 +58,13 @@
  */
 package io.github.pcorless.jpx.transform;
 
-/** Inverse multiple component transforms on the first three components, in place. */
+/** The inverse reversible component transform on the first three components, in place. */
 public final class InverseMct {
 
     private InverseMct() {
     }
 
-    /** opj_mct_decode: inverse reversible component transform (RCT). */
-    public static void decodeReversible(int[] c0, int[] c1, int[] c2, int n) {
-        decodeReversible(c0, c1, c2, 0, n);
-    }
-
-    /** decodeReversible over samples [from, to). */
+    /** opj_mct_decode: inverse reversible component transform (RCT) over samples [from, to). */
     public static void decodeReversible(int[] c0, int[] c1, int[] c2, int from, int to) {
         for (int i = from; i < to; ++i) {
             int y = c0[i];
@@ -78,21 +73,6 @@ public final class InverseMct {
             int g = y - ((u + v) >> 2);
             int r = v + g;
             int b = u + g;
-            c0[i] = r;
-            c1[i] = g;
-            c2[i] = b;
-        }
-    }
-
-    /** opj_mct_decode_real: inverse irreversible component transform (ICT). */
-    public static void decodeIrreversible(float[] c0, float[] c1, float[] c2, int n) {
-        for (int i = 0; i < n; ++i) {
-            float y = c0[i];
-            float u = c1[i];
-            float v = c2[i];
-            float r = y + (v * 1.402f);
-            float g = y - (u * 0.34413f) - (v * (0.71414f));
-            float b = y + (u * 1.772f);
             c0[i] = r;
             c1[i] = g;
             c2[i] = b;

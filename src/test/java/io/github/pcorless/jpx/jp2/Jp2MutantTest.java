@@ -43,9 +43,26 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 public class Jp2MutantTest {
+
+    /** D-23 mutants -> the mutant that decodes the same, its broken box left out. */
+    static final Map<String, String> BROKEN_CHANNEL_BOXES;
+
+    static {
+        Map<String, String> m = new HashMap<>();
+        for (String name : new String[]{"cmap-cmp-range", "cmap-mtyp-2", "cmap-pcol-swap", "cmap-pcol-range",
+                "cmap-direct-pcol"}) {
+            m.put(name, "pclr-without-cmap");
+        }
+        for (String name : new String[]{"cdef-incomplete", "cdef-cn-range", "cdef-asoc-range"}) {
+            m.put(name, "cdef-ok"); // cdef-ok's definitions keep the codestream's order
+        }
+        m.put("pclr-cdef-range", "pclr-ok");
+        BROKEN_CHANNEL_BOXES = Collections.unmodifiableMap(m);
+    }
 
     /** Mutants where the outcome deliberately differs from OpenJPEG: name -> decision. */
     static final Map<String, String> DIVERGENCES;
@@ -55,6 +72,9 @@ public class Jp2MutantTest {
         // D-15: nothing after the codestream is read; OpenJPEG's opj_end_decompress parses
         // trailing boxes and fails a fully decoded image on a malformed one.
         m.put("trailing-bad-colr", "D-15");
+        // D-23: a pclr/cmap pair or a cdef box that fails OpenJPEG's opj_jp2_check_color is skipped with a
+        // warning; OpenJPEG fails the decode. Value: the mutant that decodes the same without that box.
+        for (String name : BROKEN_CHANNEL_BOXES.keySet()) m.put(name, "D-23");
         // D-17 is invisible here: the PGX oracle keeps only the low 16 bits of the unextended
         // palette value, which equal our sign-extended one (pclr-wide-signed).
         DIVERGENCES = Collections.unmodifiableMap(m);
@@ -120,6 +140,19 @@ public class Jp2MutantTest {
         }
         assertEquals(Integer.parseInt(comps), image.components.length, "components");
         assertEquals(sha1, digest(image.components), "decoded components");
+    }
+
+    @DisplayName("a broken pclr/cmap or cdef box is skipped with a warning, the rest decodes (D-23)")
+    @Test
+    public void brokenChannelBoxesAreSkipped() throws JpxException {
+        for (Map.Entry<String, String> e : BROKEN_CHANNEL_BOXES.entrySet()) {
+            Jpeg2000Image image = decode(e.getKey());
+            assertEquals(digest(decode(e.getValue()).components), digest(image.components), e.getKey());
+            assertTrue(image.warnings().stream().anyMatch(w -> w.endsWith("is ignored.") || w.endsWith("are ignored.")),
+                    e.getKey() + ": no warning in " + image.warnings());
+        }
+        // the cdef is dropped, so no channel is opacity
+        for (Jpeg2000Decoder.Component c : decode("cdef-incomplete").components) assertEquals(0, c.channelType);
     }
 
     @Test

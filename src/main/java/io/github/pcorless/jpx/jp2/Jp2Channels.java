@@ -19,7 +19,8 @@
  *   Changed: works on copies (the header's cmap and cdef are not modified); the cdef type
  *   lands in Component.channelType rather than opj_image_comp_t.alpha, and travels with its
  *   channel when channels are reordered (D-16); signed palette values are sign-extended from
- *   their declared depth (D-17).
+ *   their declared depth (D-17); opj_jp2_check_color is split into its cdef and pclr/cmap
+ *   parts, and a part that fails skips its boxes with a warning instead of failing (D-23).
  */
 /*
  * The copyright in this software is being made available under the 2-clauses
@@ -65,6 +66,7 @@ package io.github.pcorless.jpx.jp2;
 import io.github.pcorless.jpx.Jpeg2000Decoder.Component;
 import io.github.pcorless.jpx.JpxException;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /** Turns decoded codestream components into JP2 channels: palette lookup, then channel definitions. */
@@ -73,122 +75,155 @@ public final class Jp2Channels {
     private Jp2Channels() {
     }
 
-    /** opj_jp2_apply_color_postprocessing (with ignore_pclr_cmap_cdef false). */
-    public static Component[] apply(Jp2Header h, Component[] comps, List<String> warnings) throws JpxException {
-        Jp2Header.ComponentMapping[] cmap = h.palette != null ? copy(h.componentMapping) : null;
-        check(h, comps, cmap, warnings);
+    /**
+     * opj_jp2_apply_color_postprocessing (with ignore_pclr_cmap_cdef false), except that a pclr/cmap pair
+     * or a cdef box that fails opj_jp2_check_color is skipped with a warning rather than failing the
+     * decode (D-23).
+     */
+    public static Component[] apply(Jp2Header h, Component[] comps, List<String> warnings) {
+        Jp2Header.ComponentMapping[] cmap = palette(h, comps.length, warnings);
         if (cmap != null) { // I.5.3.4: either both or none
             comps = applyPalette(h.palette, cmap, comps);
         }
-        if (h.channelDefinitions != null) {
+        if (channelDefinitions(h, comps.length, warnings)) {
             comps = applyChannelDefinitions(h.channelDefinitions, comps, new int[comps.length], warnings);
         }
         return comps;
+    }
+
+    /** Whether {@link #apply} uses the cdef box for a codestream of {@code numcomps} components. */
+    public static boolean appliesChannelDefinitions(Jp2Header h, int numcomps) {
+        List<String> ignored = new ArrayList<>();
+        Jp2Header.ComponentMapping[] cmap = palette(h, numcomps, ignored);
+        return channelDefinitions(h, cmap != null ? h.palette.columns : numcomps, ignored);
+    }
+
+    /** The component mapping to apply, or null for none: absent, or failing its check (D-23). */
+    private static Jp2Header.ComponentMapping[] palette(Jp2Header h, int numcomps, List<String> warnings) {
+        if (h.palette == null || h.componentMapping == null) return null;
+        Jp2Header.ComponentMapping[] cmap = copy(h.componentMapping);
+        try {
+            checkPalette(h, numcomps, cmap, warnings);
+            return cmap;
+        } catch (JpxException e) {
+            warnings.add(e.getMessage() + " The pclr and cmap boxes are ignored.");
+            return null;
+        }
+    }
+
+    /** Whether to apply the cdef box to {@code channels} channels: present, and passing its check (D-23). */
+    private static boolean channelDefinitions(Jp2Header h, int channels, List<String> warnings) {
+        if (h.channelDefinitions == null) return false;
+        try {
+            checkChannelDefinitions(h.channelDefinitions, channels);
+            return true;
+        } catch (JpxException e) {
+            warnings.add(e.getMessage() + " The cdef box is ignored.");
+            return false;
+        }
     }
 
     private static Jp2Header.ComponentMapping[] copy(Jp2Header.ComponentMapping[] m) {
         return m == null ? null : m.clone();
     }
 
-    /** opj_jp2_check_color. May rewrite {@code cmap} (issue 235/447). */
-    static void check(Jp2Header h, Component[] comps, Jp2Header.ComponentMapping[] cmap, List<String> warnings)
-            throws JpxException {
-        int numcomps = comps.length;
+    /**
+     * opj_jp2_check_color, cdef part. {@code channels} is the palette's column count when the palette
+     * applies, else the component count (cdef applies to cmap channels if any).
+     */
+    static void checkChannelDefinitions(Jp2Header.ChannelDefinition[] info, int channels) throws JpxException {
         /* testcase 4149.pdf.SIGSEGV.cf7.3501 */
-        if (h.channelDefinitions != null) {
-            Jp2Header.ChannelDefinition[] info = h.channelDefinitions;
-            int n = info.length;
-            int channels = numcomps;
-            /* cdef applies to cmap channels if any */
-            if (cmap != null) channels = h.palette.columns;
-            for (Jp2Header.ChannelDefinition d : info) {
-                if (d.channel >= channels) {
-                    throw new JpxException("Invalid component index " + d.channel + " (>= " + channels + ").");
-                }
-                if (d.association == 65535) continue;
-                if (d.association > 0 && d.association - 1 >= channels) {
-                    throw new JpxException("Invalid component index " + (d.association - 1) + " (>= " + channels + ").");
-                }
+        int n = info.length;
+        for (Jp2Header.ChannelDefinition d : info) {
+            if (d.channel >= channels) {
+                throw new JpxException("Invalid component index " + d.channel + " (>= " + channels + ").");
             }
-            /* issue 397: if cdef is present, it shall contain a complete list of channel definitions. */
-            while (channels > 0) {
-                int i;
-                for (i = 0; i < n; i++) {
-                    if (info[i].channel == channels - 1) break;
-                }
-                if (i == n) throw new JpxException("Incomplete channel definitions.");
-                channels--;
+            if (d.association == 65535) continue;
+            if (d.association > 0 && d.association - 1 >= channels) {
+                throw new JpxException("Invalid component index " + (d.association - 1) + " (>= " + channels + ").");
             }
         }
+        /* issue 397: if cdef is present, it shall contain a complete list of channel definitions. */
+        while (channels > 0) {
+            int i;
+            for (i = 0; i < n; i++) {
+                if (info[i].channel == channels - 1) break;
+            }
+            if (i == n) throw new JpxException("Incomplete channel definitions.");
+            channels--;
+        }
+    }
+
+    /** opj_jp2_check_color, pclr/cmap part. May rewrite {@code cmap} (issue 235/447). */
+    static void checkPalette(Jp2Header h, int numcomps, Jp2Header.ComponentMapping[] cmap, List<String> warnings)
+            throws JpxException {
         /* testcases 451.pdf.SIGSEGV.f4c.3723, 451.pdf.SIGSEGV.5b5.3723 and
            66ea31acbb0f23a2bbc91f64d69a03f5_signal_sigsegv_13937c0_7030_5725.pdf */
-        if (cmap != null) {
-            int channels = h.palette.columns;
-            boolean sane = true;
-            StringBuilder why = new StringBuilder();
-            for (int i = 0; i < channels; i++) {
-                if (cmap[i].component >= numcomps) {
-                    why.append("Invalid component index ").append(cmap[i].component).append(" (>= ").append(numcomps)
-                            .append("). ");
-                    sane = false;
-                }
+        int channels = h.palette.columns;
+        boolean sane = true;
+        StringBuilder why = new StringBuilder();
+        for (int i = 0; i < channels; i++) {
+            if (cmap[i].component >= numcomps) {
+                why.append("Invalid component index ").append(cmap[i].component).append(" (>= ").append(numcomps)
+                        .append("). ");
+                sane = false;
             }
-            boolean[] used = new boolean[channels];
-            /* verify that no component is targeted more than once */
-            for (int i = 0; i < channels; i++) {
-                int mtyp = cmap[i].mappingType;
-                int pcol = cmap[i].paletteColumn;
-                /* See ISO 15444-1 Table I.14 - MTYPi field values */
-                if (mtyp != 0 && mtyp != 1) {
-                    why.append("Invalid value for cmap[").append(i).append("].mtyp = ").append(mtyp).append(". ");
-                    sane = false;
-                } else if (pcol >= channels) {
-                    why.append("Invalid component/palette index for direct mapping ").append(pcol).append(". ");
-                    sane = false;
-                } else if (used[pcol] && mtyp == 1) {
-                    why.append("Component ").append(pcol).append(" is mapped twice. ");
-                    sane = false;
-                } else if (mtyp == 0 && pcol != 0) {
-                    /* I.5.3.5 PCOL: If the value of the MTYP field for this channel is 0, then
-                     * the value of this field shall be 0. */
-                    why.append("Direct use at #").append(i).append(" however pcol=").append(pcol).append(". ");
-                    sane = false;
-                } else if (mtyp == 1 && pcol != i) {
-                    /* OpenJPEG implementation limitation. See assert(i == pcol); */
-                    /* in opj_jp2_apply_pclr() */
-                    why.append("Implementation limitation: for palette mapping, pcol[").append(i)
-                            .append("] should be equal to ").append(i).append(", but is equal to ").append(pcol)
-                            .append(". ");
-                    sane = false;
-                } else {
-                    used[pcol] = true;
-                }
-            }
-            /* verify that all components are targeted at least once */
-            for (int i = 0; i < channels; i++) {
-                if (!used[i] && cmap[i].mappingType != 0) {
-                    why.append("Component ").append(i).append(" doesn't have a mapping. ");
-                    sane = false;
-                }
-            }
-            /* Issue 235/447 weird cmap */
-            if (sane && numcomps == 1) {
-                for (int i = 0; i < channels; i++) {
-                    if (!used[i]) {
-                        sane = false;
-                        warnings.add("Component mapping seems wrong. Trying to correct.");
-                        break;
-                    }
-                }
-                if (!sane) {
-                    sane = true;
-                    for (int i = 0; i < channels; i++) {
-                        cmap[i] = new Jp2Header.ComponentMapping(cmap[i].component, 1, i);
-                    }
-                }
-            }
-            if (!sane) throw new JpxException(why.toString().trim());
         }
+        boolean[] used = new boolean[channels];
+        /* verify that no component is targeted more than once */
+        for (int i = 0; i < channels; i++) {
+            int mtyp = cmap[i].mappingType;
+            int pcol = cmap[i].paletteColumn;
+            /* See ISO 15444-1 Table I.14 - MTYPi field values */
+            if (mtyp != 0 && mtyp != 1) {
+                why.append("Invalid value for cmap[").append(i).append("].mtyp = ").append(mtyp).append(". ");
+                sane = false;
+            } else if (pcol >= channels) {
+                why.append("Invalid component/palette index for direct mapping ").append(pcol).append(". ");
+                sane = false;
+            } else if (used[pcol] && mtyp == 1) {
+                why.append("Component ").append(pcol).append(" is mapped twice. ");
+                sane = false;
+            } else if (mtyp == 0 && pcol != 0) {
+                /* I.5.3.5 PCOL: If the value of the MTYP field for this channel is 0, then
+                 * the value of this field shall be 0. */
+                why.append("Direct use at #").append(i).append(" however pcol=").append(pcol).append(". ");
+                sane = false;
+            } else if (mtyp == 1 && pcol != i) {
+                /* OpenJPEG implementation limitation. See assert(i == pcol); */
+                /* in opj_jp2_apply_pclr() */
+                why.append("Implementation limitation: for palette mapping, pcol[").append(i)
+                        .append("] should be equal to ").append(i).append(", but is equal to ").append(pcol)
+                        .append(". ");
+                sane = false;
+            } else {
+                used[pcol] = true;
+            }
+        }
+        /* verify that all components are targeted at least once */
+        for (int i = 0; i < channels; i++) {
+            if (!used[i] && cmap[i].mappingType != 0) {
+                why.append("Component ").append(i).append(" doesn't have a mapping. ");
+                sane = false;
+            }
+        }
+        /* Issue 235/447 weird cmap */
+        if (sane && numcomps == 1) {
+            for (int i = 0; i < channels; i++) {
+                if (!used[i]) {
+                    sane = false;
+                    warnings.add("Component mapping seems wrong. Trying to correct.");
+                    break;
+                }
+            }
+            if (!sane) {
+                sane = true;
+                for (int i = 0; i < channels; i++) {
+                    cmap[i] = new Jp2Header.ComponentMapping(cmap[i].component, 1, i);
+                }
+            }
+        }
+        if (!sane) throw new JpxException(why.toString().trim());
     }
 
     /* file9.jp2 */

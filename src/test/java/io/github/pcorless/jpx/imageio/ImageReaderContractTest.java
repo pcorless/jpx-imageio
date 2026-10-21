@@ -37,6 +37,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
@@ -313,6 +314,15 @@ public class ImageReaderContractTest {
             r.setInput(in);
             assertEquals(64, r.read(0).getWidth());
             assertEquals(1, warnings.get(), "compression type warning");
+        }
+        // so is a broken cmap box (D-23): the palette is skipped and the indices come back as one band
+        try (ImageInputStream in = stream(resource("/jp2mut/cmap-mtyp-2.jp2"))) {
+            ImageReader r = spi().createReaderInstance();
+            List<String> warnings = new ArrayList<>();
+            r.addIIOReadWarningListener((source, warning) -> warnings.add(warning));
+            r.setInput(in);
+            assertEquals(1, r.read(0).getRaster().getNumBands());
+            assertTrue(warnings.stream().anyMatch(w -> w.contains("cmap")), "cmap warning in " + warnings);
         }
     }
 

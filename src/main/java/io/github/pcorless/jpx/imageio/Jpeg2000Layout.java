@@ -86,7 +86,8 @@ final class Jpeg2000Layout {
                 extra.add(c);
             }
         }
-        boolean hasCdef = h.jp2 != null && h.jp2.channelDefinitions != null;
+        // a cdef box that fails its check is not applied (D-23), so it says nothing about the channels
+        boolean hasCdef = h.jp2 != null && Jp2Channels.appliesChannelDefinitions(h.jp2, h.codestream.components.length);
         ColorSpace cs = null;
         String name = null;
         // the colour space the file declares

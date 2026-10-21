@@ -287,3 +287,22 @@ code, which isn't ported). `Jpeg2000Layout` decides, ORIGINAL:
   `Jpeg2000ImageReadParam.setMaxSamples` raise or lower it. The ImageIO reader checks its output
   size before `getDestination` as well. A fixed limit rather than one from `Runtime.maxMemory()`, so
   whether a file decodes doesn't depend on the heap.
+
+## D-23 A broken pclr/cmap or cdef box is skipped, not fatal (2026-10-20)
+
+- **Observed:** a 648 x 544 palette image in a QA-corpus PDF (`attachment.pdf`, written by iText
+  2.1.7) has a 4-column CMYK `pclr` and a `cmap` box placed after `jp2h` whose entries 1-3 are junk
+  (MTYP 0x98, 0x75, 0x8b). OpenJPEG 2.5.4 fails it in `opj_jp2_check_color` ("Invalid value for
+  cmap[1].mtyp = 152 ..."), and so did this reader; JJ2000 throws an AIOOBE from `getColorModel`.
+  The codestream itself is a sound one-component image of palette indices. A PDF renderer colours
+  those through the PDF's own `/Indexed` table, so the boxes it was refused over are ones it ignores
+  anyway (poppler decodes PDF images with `OPJ_DPARAMETERS_IGNORE_PCLR_CMAP_CDEF_FLAG` for that
+  reason).
+- **Decision:** `Jp2Channels.apply` checks the pclr/cmap pair and the cdef box separately (cdef
+  against the palette's columns when the palette applies, as before). A part that fails is skipped
+  with a warning naming the reason, and the decode goes on: a broken palette gives the codestream's
+  components, a broken cdef gives the channels in codestream order with no opacity. The layout
+  treats a skipped cdef as absent. The nine `jp2mut` mutants that OpenJPEG fails this way are
+  recorded divergences in `Jp2MutantTest`, each pinned to the mutant that decodes the same without
+  the broken box. Damage that `Jp2Reader` rejects while parsing (a cmap before its pclr, a second
+  box, a truncated one) still fails, as in OpenJPEG.

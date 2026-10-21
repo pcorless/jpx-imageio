@@ -6,7 +6,7 @@
 
     <groupId>com.github.pcorless</groupId>
     <artifactId>jpx-imageio</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>0.1.0</version>
     <name>jpx-imageio</name>
     <description>Pure-Java JPEG 2000 decoder and ImageIO reader</description>
     <url>https://github.com/pcorless/jpx-imageio/</url>

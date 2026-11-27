@@ -105,6 +105,14 @@ in a micro-benchmark, no change end to end: the pass is memory-bound).
 3. ~~Fuse ICT, level shift and clamp~~: done, about +3%. `Math.rint` stays: it is exact,
    and the level shift no longer shows as a separate cost in the profile worth chasing.
 4. ~~5/3 vertical pass in column blocks~~: done (2026-10-20), below.
+5. Input copies (nice to have, memory rather than speed): `Jpeg2000ImageReader.setInput` copies
+   the stream through a `ByteArrayOutputStream` and `toByteArray()`. When `in.length()` is known,
+   allocate the exact `byte[]` and `readFully` instead; keep the loop for unknown lengths
+   (`MemoryCacheImageInputStream` reports -1). A PDF stream fed through ImageIO is copied about
+   three times (`MemoryCacheImageInputStream` cache, the buffer, `toByteArray`); callers that
+   already hold the bytes, such as ICEpdf, can call `Jpeg2000Decoder` directly with no copy.
+   I/O is well under 1% of decode time, so expect no MP/s change. NIO (mapped files) doesn't
+   fit: the core works on heap `byte[]`, and PDF streams are already in memory.
 
 ## 5/3 vertical pass in column blocks (2026-10-20)
 
@@ -227,3 +235,49 @@ OpenJPEG has the same structure in C, where the compiler emits conditional moves
 is the per-decision dependency chain through A, C and CT; going further means a different MQ
 decoding structure (for instance decoding runs of MPS decisions between renormalisations, as
 fast commercial decoders do), a larger and riskier change than the ones above.
+
+## Encoder (GH-2, 2026-11-26)
+
+`Jpeg2000Encoder` / `Jpeg2000ImageWriter`, built with the decoder's lessons from the start:
+- the vertical wavelet pass takes 16 columns at a time (lanes), as `InverseDwt` does, for both
+  5/3 and 9/7; the horizontal pass works on one row;
+- the DC level shift and the colour transform are one pass, straight from the interleaved pixel
+  rows into the component planes, with no intermediate per-channel copy;
+- rows, both wavelet passes and the code-blocks are spread over `Jpeg2000Threads` with
+  `Parallel.forEach`, with the decoder's work-item sizes and thresholds; output is byte-identical
+  whatever the thread count (`Jpeg2000EncoderTest`);
+- the ImageIO writer reads each row with one `Raster.getDataElements` call for byte-interleaved
+  and int-packed rasters, and never takes the `DataBuffer` array (the reader's copy lesson, in
+  reverse);
+- the MQ state stays in fields (the decoder's "locals" experiment lost 3.5%).
+
+`tools/bench/EncBench.java`: the 7 corpus photos of `WriterCheck` decoded to 8-bit RGB (2.0-4.0 MP)
+plus the synthetic 8000 x 6000 RGB, 69.4 MP in all, encoded from memory, best of 3 after warm-up,
+JVM on CPUs 0-15:
+
+| Encode | 1 thread | 8 threads |
+|---|---|---|
+| jpx-imageio lossless | 10.8 s, 6.4 MP/s | 1.79 s, 38.9 MP/s (6.1x) |
+| jpx-imageio lossy, quality 0.8 | 3.67 s, 18.9 MP/s | 0.77 s, 89.8 MP/s (4.7x) |
+| `opj_compress` 2.5.4 lossless, strict / Release | 11.5 s / 11.0 s | 3.8 s / 3.8 s (`-threads 8`) |
+
+`opj_compress` times are wall clock per file (best of 2, `taskset -c 0`, or `0-15` threaded), so
+they include reading the PPM and writing the file, which the Java numbers don't: read them as
+"about the same on one thread". The outputs are the same bytes (less OpenJPEG's COM marker).
+Lossy has no OpenJPEG counterpart to time: its rate control does more work for a different result.
+
+JFR (`settings=profile`, one thread, samples by top frame, bench setup excluded): lossless,
+tier-1 90% (the MQ coder 62%, the pass loops 28%), forward 5/3 8%, rows and RCT 1%, tier-2 under
+1%. Lossy at quality 0.8 codes fewer bit-planes: forward 9/7 41%, tier-1 47% (MQ 31%), rows and
+ICT 6%, clearing the tier-1 flags 2%.
+
+Tier-1 alone (a 4000 x 3000 5/3 plane, every 64 x 64 block, one thread, best of 12):
+
+| Change | Time | Kept |
+|---|---|---|
+| MQ encoder as the C (bit-at-a-time RENORME, branches) | 617 ms (594-639) | |
+| RENORME shifting as many bits as A needs and CT has (the decoder's RENORMD change) | 613-629 ms | no: no gain |
+| ENCODE's interval chosen with masks, one branch left ("renormalise?") | 601 ms (585-617) | yes, about +2.5%, edge of noise |
+
+Same bytes from every variant. The ImageIO writer costs 1-4% over encoding from a byte array with
+threads, 7-14% on one thread (4000 x 3000, `INT_RGB`, `3BYTE_BGR`, `BYTE_GRAY`, `INT_ARGB`).

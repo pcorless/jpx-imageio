@@ -16,7 +16,7 @@
  * Provenance: ADAPTED from OpenJPEG src/lib/openjp2/mqc.c, mqc_inl.h @ 6c4a29b0 (BSD-2):
  *   mqc_states, opj_mqc_init_dec, opj_mqc_raw_init_dec, opj_mqc_resetstates, opj_mqc_setstate,
  *   opj_mqc_setcurctx, opj_mqc_decode_macro (+ lps/mps exchange, renormd), opj_mqc_bytein_macro,
- *   opj_mqc_raw_decode. Decoder half only; the encoder isn't ported.
+ *   opj_mqc_raw_decode. Decoder half; the encoder is MqEncoder.
  *   Changed: the C writes an artificial FF FF marker past the end of the segment (and restores
  *   the two bytes afterwards); here reads at or past the end return 0xFF instead, so the input
  *   array is never modified and needs no slack. State pointers became indices into four tables.

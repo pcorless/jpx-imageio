@@ -1,6 +1,7 @@
 # jpx-imageio
 
-Pure-Java JPEG 2000 (ISO/IEC 15444-1) decoder with an ImageIO reader. No runtime dependencies,
+Pure-Java JPEG 2000 (ISO/IEC 15444-1) decoder with an ImageIO reader, and a basic encoder with an
+ImageIO writer. No runtime dependencies,
 Java 11, Apache 2.0, with portions derived from OpenJPEG 2.5.4 (BSD-2; see `NOTICE`).
 
 Status: J2K and JP2 decoding is bit-exact against OpenJPEG 2.5.4 on the
@@ -54,6 +55,31 @@ BufferedImage image = ImageIO.read(new File("photo.jp2"));
 - Without ImageIO: `Jpeg2000Decoder.decodeImage(bytes, 0, bytes.length, reduce)`, or with
   `Jpeg2000Decoder.Options` for an area, progress and threads.
 
+## Write
+
+A deliberately basic writer for 8-bit grey and RGB, made for putting JPEG 2000 back into PDFs
+(`JPXDecode`): it writes a raw codestream (J2K), one tile, one layer. Lossless by default, and then
+the same bytes as `opj_compress` with its defaults; lossy with a quality below 1.
+
+```java
+ImageIO.write(image, "jpeg2000", new File("out.j2k"));        // lossless (5/3)
+
+ImageWriter writer = ImageIO.getImageWritersByFormatName("jpeg2000").next();
+ImageWriteParam param = writer.getDefaultWriteParam();
+param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+param.setCompressionQuality(0.8f);                             // lossy (9/7), about 54 dB on photos
+```
+
+- A quality sets the quantiser's step, not a size: there's no rate control. PSNR and bits per pixel
+  per quality: `docs/IMAGEIO-WRITER-CONTRACT.md`.
+- Indexed images are written as grey or RGB; alpha is left out with a warning; 16-bit, CMYK and
+  premultiplied alpha are refused. No JP2 boxes, so no colour space, ICC or alpha in the file.
+- The reader's size limit applies: more than 2^28 samples is refused before anything is read
+  (`Jpeg2000ImageWriteParam.setMaxSamples` changes it).
+- Without ImageIO: `Jpeg2000Encoder.encode(samples, width, height, components, options)`.
+- Encoding runs on the same threads as decoding: on 8 threads about 39 MP/s lossless and 90 MP/s
+  at quality 0.8 (photos, 8000 x 6000 included); on one thread about the speed of `opj_compress`.
+
 ## Performance
 
 Decoding all 3,744 JPEG 2000 streams found in a corpus of real-world PDFs (4,247 megapixels,
@@ -87,7 +113,7 @@ Method, per-phase profiles and the changes tried: `docs/PERFORMANCE.md`.
 
 ## Documentation
 
-- Requirements: `docs/IMAGEIO-CONTRACT.md`
+- Requirements: `docs/IMAGEIO-CONTRACT.md` (reader), `docs/IMAGEIO-WRITER-CONTRACT.md` (writer)
 - Provenance rules and the per-file record: `docs/PROVENANCE-RULES.md`, `PROVENANCE.md`
 - Observations that drove decisions: `docs/DECISIONS.md`
 

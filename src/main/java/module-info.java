@@ -15,7 +15,7 @@
  *
  * Provenance: ORIGINAL.
  */
-/** A pure-Java JPEG 2000 decoder and its ImageIO reader. */
+/** A pure-Java JPEG 2000 decoder and basic encoder, with their ImageIO reader and writer. */
 module io.github.pcorless.jpx {
     requires transitive java.desktop;
 
@@ -25,4 +25,5 @@ module io.github.pcorless.jpx {
     exports io.github.pcorless.jpx.imageio;
 
     provides javax.imageio.spi.ImageReaderSpi with io.github.pcorless.jpx.imageio.Jpeg2000ImageReaderSpi;
+    provides javax.imageio.spi.ImageWriterSpi with io.github.pcorless.jpx.imageio.Jpeg2000ImageWriterSpi;
 }

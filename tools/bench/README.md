@@ -12,4 +12,8 @@ Results and method: `docs/PERFORMANCE.md`.
 - `T1Bench.java`: tier-1 (code-block decoding) alone, one thread, N rounds after warm-up, with a
   checksum of every coefficient: `java -cp <classes> tools/bench/T1Bench.java 3 9 image.j2k`.
 
+- `EncBench.java`: the encoder, from samples in memory: JPEG 2000 files decoded to 8-bit grey/RGB,
+  or `synth` (8000 x 6000 RGB). `java -Xmx10g -cp <classes> tools/bench/EncBench.java <threads> <quality> <rounds> files... [synth]`;
+  `-Dppm=<dir>` also writes each source as PPM/PGM for `opj_compress`.
+
 Pin runs to cores (`taskset`) and don't run two benchmarks on the same cores at once.

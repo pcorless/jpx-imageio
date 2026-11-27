@@ -306,3 +306,31 @@ code, which isn't ported). `Jpeg2000Layout` decides, ORIGINAL:
   recorded divergences in `Jp2MutantTest`, each pinned to the mutant that decodes the same without
   the broken box. Damage that `Jp2Reader` rejects while parsing (a cmap before its pclr, a second
   box, a truncated one) still fails, as in OpenJPEG.
+
+## D-24 The writer: a codestream, lossless by default, a quality sets the step (2026-11-26)
+
+- **Need (GH-2):** ICEpdf redaction writes a burned `JPXDecode` image back as Flate RGB, several
+  times larger. PDF takes a raw codestream and keeps the colour space in its dictionary.
+- **Output:** a J2K codestream, never JP2 boxes. Format names `jpeg2000`/`j2k`, suffixes `j2k`/`j2c`;
+  not `jp2`, so `ImageIO.write(img, "jp2", f)` doesn't silently produce a file a JP2 reader rejects.
+- **Default lossless:** any compression mode but `MODE_EXPLICIT` with a quality below 1 gives 5/3 +
+  RCT, so a plain `ImageIO.write` loses nothing. With OpenJPEG's defaults the result is byte for byte
+  `opj_compress`'s, less its COM marker (`Jpeg2000EncoderTest.matchesOpenJpeg`, 9 fixtures; and the
+  8 `EncBench` images, 69.4 MP), which is the strongest check there is that tier-1 and tier-2 are right.
+- **Quality:** base step 2^(6 (1 - q)) sample units over each band's 9/7 synthesis norm
+  (`opj_dwt_calc_explicit_stepsizes` with its unit step scaled), so q = 1 - epsilon is near lossless
+  and q = 0 is a step of 64. Chosen so the ImageIO range is usable end to end; the measured PSNR and
+  bits per pixel per quality are in `IMAGEIO-WRITER-CONTRACT.md` (`tools/vectors/WriterCheck.java`,
+  OpenJPEG 2.5.4 and this decoder agreeing on all 189 files).
+- **Levels:** 5 (OpenJPEG's default), capped at floor(log2(min(width, height))) so no sub-band is
+  empty; OpenJPEG refuses an image too small for its levels instead.
+- **Guard bits:** 2, as OpenJPEG, unless a code-block's bit-planes need more (chosen after tier-1,
+  which doesn't depend on them). 2 always sufficed on real images; the check keeps a pathological
+  image from writing a stream that decoders reject. Streams forced to 3-7 guard bits decode the same
+  in OpenJPEG 2.5.4 and this decoder (`Jpeg2000EncoderTest.guardBits`).
+- **Size limit:** the reader's (D-22), 2^28 samples by default, checked before a row is read. The
+  encoder holds every sample as a 4-byte int or float, so an unchecked huge image means an
+  `OutOfMemoryError` deep in the encode instead of a clear refusal.
+- **Images:** alpha is left out with a warning rather than refused (a burned image usually comes from
+  an ARGB buffer that is opaque); premultiplied alpha is refused, since the colours alone would be
+  wrong; an indexed image becomes grey or RGB from its palette.

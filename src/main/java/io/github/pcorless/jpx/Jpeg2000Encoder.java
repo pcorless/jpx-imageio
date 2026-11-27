@@ -146,6 +146,7 @@ package io.github.pcorless.jpx;
 
 import io.github.pcorless.jpx.codestream.CodestreamWriter;
 import io.github.pcorless.jpx.internal.Parallel;
+import io.github.pcorless.jpx.jp2.Jp2Writer;
 import io.github.pcorless.jpx.tier1.CodeBlockEncoder;
 import io.github.pcorless.jpx.tier2.PacketEncoder;
 import io.github.pcorless.jpx.transform.ForwardDwt;
@@ -162,7 +163,7 @@ import java.util.List;
 
 /**
  * A basic JPEG 2000 encoder: 8-bit grey or RGB into a raw codestream (J2K, as PDF's JPXDecode
- * takes it). One tile, one quality layer, LRCP, 64 x 64 code-blocks, no precincts; lossless 5/3
+ * takes it) or a JP2 file. One tile, one quality layer, LRCP, 64 x 64 code-blocks, no precincts; lossless 5/3
  * with the RCT, or lossy 9/7 with the ICT and step sizes set by a quality (no rate control: you
  * choose a quality, not a size).
  */
@@ -200,8 +201,18 @@ public final class Jpeg2000Encoder {
         boolean codeBlocksDone(int done, int total);
     }
 
+    /** What to write: a raw codestream, or a JP2 file around it. */
+    public enum Format {
+        /** A raw codestream (T.800 Annex A), as PDF's JPXDecode takes it: no colour space. */
+        J2K,
+        /** A JP2 file (T.800 Annex I): signature, file type, header (ihdr, colr), codestream. */
+        JP2
+    }
+
     /** How to encode: lossless or a quality, decomposition levels, threads, progress. Not thread-safe. */
     public static final class Options {
+        Format format = Format.J2K;
+        byte[] icc;
         float quality = 1f;
         int levels = -1;
         long maxSamples;
@@ -248,6 +259,23 @@ public final class Jpeg2000Encoder {
             return this;
         }
 
+        /** J2K (the default) or JP2. */
+        public Options format(Format format) {
+            if (format == null) throw new IllegalArgumentException("format is null");
+            this.format = format;
+            return this;
+        }
+
+        /**
+         * For JP2: the colour space as an ICC profile (written as a restricted ICC colour
+         * specification, method 2), which must be a grey profile for one component and an RGB one
+         * for three. Null (the default) writes the enumerated sRGB or greyscale space instead.
+         */
+        public Options iccProfile(byte[] icc) {
+            this.icc = icc != null ? icc.clone() : null;
+            return this;
+        }
+
         /** Tests only: at least {@code g} guard bits (2-7). */
         Options minGuardBits(int g) {
             if (g < MIN_GUARD_BITS || g > 7) throw new IllegalArgumentException("guard bits " + g);
@@ -289,7 +317,7 @@ public final class Jpeg2000Encoder {
     }
 
     /**
-     * Encodes the image {@code source} gives to {@code out} as a J2K codestream. Returns false,
+     * Encodes the image {@code source} gives to {@code out}, as a J2K codestream or a JP2 file. Returns false,
      * having written nothing, when the progress hook stopped it.
      */
     public static boolean encode(Source source, int width, int height, int numComponents, Options options,
@@ -305,6 +333,7 @@ public final class Jpeg2000Encoder {
         long max = o.maxSamples > 0 ? o.maxSamples : Jpeg2000Decoder.defaultMaxSamples();
         long samples = (long) width * height * numComponents;
         if (samples > max) throw JpxException.tooLarge("image to encode", samples, max);
+        if (o.icc != null) checkIcc(o.icc, numComponents);
         Jpeg2000Threads threads = o.threads != null ? o.threads : Jpeg2000Threads.defaults();
         boolean reversible = o.reversible();
         int levels = Math.min(o.levels >= 0 ? o.levels : DEFAULT_LEVELS, maxLevels(width, height));
@@ -339,13 +368,24 @@ public final class Jpeg2000Encoder {
         List<PacketEncoder.Blocks[]> bodies = new ArrayList<>();
         long packetBytes = packets(bands, coded, exponent, guardBits, levels, numComponents, headers, bodies);
 
+        // the headers first, so a JP2 codestream box knows its length
+        ByteArrayOutputStream head = new ByteArrayOutputStream(256);
+        DataOutputStream h = new DataOutputStream(head);
+        CodestreamWriter.soc(h);
+        CodestreamWriter.siz(h, width, height, numComponents, PRECISION);
+        CodestreamWriter.cod(h, levels, mct, reversible);
+        CodestreamWriter.qcd(h, guardBits, exponent, mantissa);
+        CodestreamWriter.sot(h, CodestreamWriter.TILE_PART_HEADER_LENGTH + packetBytes);
+        CodestreamWriter.sod(h);
+        h.flush();
+
         DataOutputStream d = new DataOutputStream(new BufferedOutputStream(out, 1 << 16));
-        CodestreamWriter.soc(d);
-        CodestreamWriter.siz(d, width, height, numComponents, PRECISION);
-        CodestreamWriter.cod(d, levels, mct, reversible);
-        CodestreamWriter.qcd(d, guardBits, exponent, mantissa);
-        CodestreamWriter.sot(d, CodestreamWriter.TILE_PART_HEADER_LENGTH + packetBytes);
-        CodestreamWriter.sod(d);
+        if (o.format == Format.JP2) {
+            long codestreamLength = head.size() + packetBytes + 2;
+            Jp2Writer.writeHeader(d, width, height, numComponents, PRECISION,
+                    numComponents == 1 ? Jp2Writer.ENUM_GREYSCALE : Jp2Writer.ENUM_SRGB, o.icc, codestreamLength);
+        }
+        head.writeTo(d);
         for (int i = 0; i < headers.size(); i++) {
             d.write(headers.get(i));
             PacketEncoder.writeBody(bodies.get(i), d);
@@ -353,6 +393,17 @@ public final class Jpeg2000Encoder {
         CodestreamWriter.eoc(d);
         d.flush();
         return true;
+    }
+
+    /** An ICC profile whose header says it is grey for 1 component, RGB for 3 (ICC.1 7.2.6). */
+    static void checkIcc(byte[] icc, int numComponents) {
+        if (icc.length < 128) throw new IllegalArgumentException("ICC profile of " + icc.length + " bytes");
+        int space = ((icc[16] & 0xff) << 24) | ((icc[17] & 0xff) << 16) | ((icc[18] & 0xff) << 8) | (icc[19] & 0xff);
+        int want = numComponents == 1 ? 0x47524159 : 0x52474220; // 'GRAY', 'RGB '
+        if (space != want) {
+            throw new IllegalArgumentException("ICC profile for " + new String(icc, 16, 4, java.nio.charset.StandardCharsets.US_ASCII)
+                    + " with " + numComponents + " component(s)");
+        }
     }
 
     /** Levels such that the smallest resolution is at least 1 x 1 and no band is empty. */

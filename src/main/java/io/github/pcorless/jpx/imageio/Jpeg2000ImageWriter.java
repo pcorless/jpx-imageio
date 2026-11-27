@@ -35,11 +35,14 @@ import java.io.IOException;
 import java.io.OutputStream;
 
 /**
- * Writes an 8-bit grey or RGB image as a JPEG 2000 codestream (J2K, no JP2 boxes), through
- * {@link Jpeg2000Encoder}: lossless by default, lossy with an explicit quality below 1. See
- * {@code docs/IMAGEIO-WRITER-CONTRACT.md}.
+ * Writes an 8-bit grey or RGB image as a JP2 file or a raw JPEG 2000 codestream (J2K), through
+ * {@link Jpeg2000Encoder}: lossless by default, lossy with an explicit quality below 1. A writer
+ * from {@link Jp2ImageWriterSpi} writes JP2, one from {@link Jpeg2000ImageWriterSpi} J2K;
+ * {@link Jpeg2000ImageWriteParam#setFormat} overrides it. See {@code docs/IMAGEIO-WRITER-CONTRACT.md}.
  * <ul>
  *   <li>Writes one image; no metadata, no thumbnails (they are left out with a warning).</li>
+ *   <li>JP2: the colour space is sRGB, greyscale, or the image's own ICC profile when it is a
+ *   grey TRC or RGB matrix/TRC one; any other colour space is refused (J2K takes it).</li>
  *   <li>{@link ImageWriteParam} source region, subsampling (with offsets) and source bands are
  *   honoured; destination offset and type don't apply to a codestream and are ignored.</li>
  *   <li>An alpha band is left out, with a warning; premultiplied alpha is refused. An indexed
@@ -118,6 +121,7 @@ public class Jpeg2000ImageWriter extends ImageWriter {
         if (src.alphaDropped) processWarningOccurred(0, "the alpha band is not written (no alpha in a JPEG 2000 codestream here)");
 
         Jpeg2000Encoder.Options o = new Jpeg2000Encoder.Options();
+        Jpeg2000Encoder.Format format = defaultFormat();
         Jpeg2000Threads threads = null;
         if (param instanceof Jpeg2000ImageWriteParam) {
             Jpeg2000ImageWriteParam jp = (Jpeg2000ImageWriteParam) param;
@@ -125,10 +129,16 @@ public class Jpeg2000ImageWriter extends ImageWriter {
             if (jp.getLevels() >= 0) o.levels(jp.getLevels());
             threads = jp.getThreads();
             o.maxSamples(jp.getMaxSamples());
+            if (jp.getFormat() != null) format = jp.getFormat();
         } else if (param != null && param.canWriteCompressed() && param.getCompressionMode() == ImageWriteParam.MODE_EXPLICIT) {
             o.quality(param.getCompressionQuality());
         }
         o.threads(threads != null ? threads : Jpeg2000Threads.defaults());
+        o.format(format);
+        if (format == Jpeg2000Encoder.Format.JP2) {
+            if (src.jp2Refusal != null) throw new IIOException(src.jp2Refusal);
+            o.iccProfile(src.jp2Icc);
+        }
         o.progress((done, total) -> {
             processImageProgress(100f * done / total);
             return !abortRequested();
@@ -143,6 +153,11 @@ public class Jpeg2000ImageWriter extends ImageWriter {
         }
         stream.flush();
         processImageComplete();
+    }
+
+    /** JP2 for a writer from {@link Jp2ImageWriterSpi}, else J2K. */
+    private Jpeg2000Encoder.Format defaultFormat() {
+        return originatingProvider instanceof Jp2ImageWriterSpi ? Jpeg2000Encoder.Format.JP2 : Jpeg2000Encoder.Format.J2K;
     }
 
     /** An OutputStream over the ImageOutputStream (which isn't one). */

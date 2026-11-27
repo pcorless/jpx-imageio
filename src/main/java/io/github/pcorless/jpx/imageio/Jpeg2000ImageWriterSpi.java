@@ -25,14 +25,14 @@ import javax.imageio.stream.ImageOutputStream;
 import java.util.Locale;
 
 /**
- * Registers {@link Jpeg2000ImageWriter} with ImageIO. It writes a raw codestream, so it claims
- * the codestream suffixes (j2k, j2c), not jp2.
+ * Registers {@link Jpeg2000ImageWriter} with ImageIO for raw codestreams (J2K): format names
+ * {@code j2k}, suffixes {@code j2k} and {@code j2c}. JP2 files: {@link Jp2ImageWriterSpi}.
  */
 public final class Jpeg2000ImageWriterSpi extends ImageWriterSpi {
 
     public Jpeg2000ImageWriterSpi() {
         super("jpx-imageio", Jpeg2000ImageReaderSpi.VERSION,
-                new String[]{"jpeg2000", "JPEG2000", "jpeg 2000", "JPEG 2000", "j2k", "J2K"},
+                new String[]{"j2k", "J2K"},
                 new String[]{"j2k", "j2c"},
                 null,
                 "io.github.pcorless.jpx.imageio.Jpeg2000ImageWriter",

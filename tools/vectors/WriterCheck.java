@@ -19,7 +19,7 @@
 // J2K with Jpeg2000Encoder at each quality, decodes it with opj_decompress (-o x.pgm / x.ppm) and
 // with this decoder, and prints: name, size, components, quality, bytes, bits per pixel, PSNR
 // against the source through OpenJPEG and through this decoder, and whether the two decodes
-// agree. Lossless rows must show "inf inf". Usage:
+// agree. Lossless rows must show "inf inf". -Dformat=jp2 writes JP2 files instead of codestreams. Usage:
 //   java -cp build/classes/java/main tools/vectors/WriterCheck.java <opj_decompress> <workdir> [corpus files...]
 import io.github.pcorless.jpx.Jpeg2000Decoder;
 import io.github.pcorless.jpx.Jpeg2000Encoder;
@@ -35,6 +35,9 @@ import java.util.List;
 import java.util.Random;
 
 public class WriterCheck {
+
+    static final Jpeg2000Encoder.Format FORMAT = "jp2".equals(System.getProperty("format"))
+            ? Jpeg2000Encoder.Format.JP2 : Jpeg2000Encoder.Format.J2K;
 
     static final float[] QUALITIES = {1f, 0.95f, 0.9f, 0.8f, 0.7f, 0.6f, 0.5f, 0.4f, 0.3f};
 
@@ -69,8 +72,8 @@ public class WriterCheck {
         System.out.println("name\tw\th\tc\tquality\tbytes\tbpp\tpsnr_opj\tpsnr_ours\tdecodes_agree");
         for (Src s : srcs) {
             for (float q : QUALITIES) {
-                byte[] j2k = Jpeg2000Encoder.encode(s.px, s.w, s.h, s.c, new Jpeg2000Encoder.Options().quality(q));
-                Path in = work.resolve("w.j2k");
+                byte[] j2k = Jpeg2000Encoder.encode(s.px, s.w, s.h, s.c, new Jpeg2000Encoder.Options().quality(q).format(FORMAT));
+                Path in = work.resolve(FORMAT == Jpeg2000Encoder.Format.JP2 ? "w.jp2" : "w.j2k");
                 Path out = work.resolve(s.c == 1 ? "w.pgm" : "w.ppm");
                 Files.write(in, j2k);
                 Files.deleteIfExists(out);
@@ -92,7 +95,8 @@ public class WriterCheck {
     }
 
     static int[] decode(byte[] j2k, Src s) throws IOException {
-        Jpeg2000Decoder.Component[] cs = Jpeg2000Decoder.decode(j2k, 0, j2k.length, 0);
+        Jpeg2000Decoder.Component[] cs = Jpeg2000Decoder.decodeImage(Jpeg2000Headers.read(j2k, 0, j2k.length),
+                new Jpeg2000Decoder.Options()).components;
         int n = s.w * s.h;
         int[] out = new int[n * s.c];
         for (int c = 0; c < s.c; c++) for (int i = 0; i < n; i++) out[i * s.c + c] = cs[c].samples[i];

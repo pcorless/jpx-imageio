@@ -8,7 +8,7 @@
     <artifactId>jpx-imageio</artifactId>
     <version>0.1.1-SNAPSHOT</version>
     <name>jpx-imageio</name>
-    <description>Pure-Java JPEG 2000 decoder and ImageIO reader</description>
+    <description>Pure-Java JPEG 2000 decoder and ImageIO reader, with a basic encoder and ImageIO writer</description>
     <url>https://github.com/pcorless/jpx-imageio/</url>
 
     <licenses>

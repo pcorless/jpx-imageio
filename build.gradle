@@ -4,7 +4,7 @@ plugins {
 
 group = GROUP
 version = VERSION
-description = 'Pure-Java JPEG 2000 decoder and ImageIO reader'
+description = 'Pure-Java JPEG 2000 decoder and ImageIO reader, with a basic encoder and ImageIO writer'
 
 java {
     toolchain {

@@ -14,9 +14,9 @@
  * limitations under the License.
  *
  * Provenance: PORTED from OpenJPEG src/lib/openjp2/tgt.c @ 6c4a29b0 (BSD-2):
- *   opj_tgt_create, opj_tgt_reset, opj_tgt_decode. Decoder half only.
- *   Changed: nodes are parallel arrays (parent index, value, low) instead of structs with
- *   pointers; the unused "known" flag is dropped (only the encoder reads it).
+ *   opj_tgt_create, opj_tgt_reset, opj_tgt_decode, opj_tgt_setvalue, opj_tgt_encode.
+ *   Changed: nodes are parallel arrays (parent index, value, low, known) instead of structs
+ *   with pointers; "known" is allocated on the first encode (only the encoder reads it).
  *   Algorithm: ITU-T T.800 B.10.2.
  */
 /*
@@ -100,6 +100,7 @@ package io.github.pcorless.jpx.tier2;
 
 /**
  * Tag tree (T.800 B.10.2): code-block inclusion and zero bit-plane counts in packet headers.
+ * A tree is used either to decode or to encode, not both.
  */
 public final class TagTree {
 
@@ -111,6 +112,8 @@ public final class TagTree {
     private final int[] parent;
     private final int[] value;
     private final int[] low;
+    /** Encoder only: the node's value has been signalled. */
+    private boolean[] known;
     /** Path from a leaf up to the root; a tree never has more than 32 levels. */
     private final int[] stack = new int[32];
 
@@ -180,6 +183,54 @@ public final class TagTree {
     public void reset() {
         java.util.Arrays.fill(value, UNKNOWN);
         java.util.Arrays.fill(low, 0);
+        if (known != null) java.util.Arrays.fill(known, false);
+    }
+
+    /** opj_tgt_setvalue: sets a leaf's value, lowering its ancestors' to it where higher. */
+    public void setValue(int leaf, int v) {
+        int node = leaf;
+        while (node >= 0 && value[node] > v) {
+            value[node] = v;
+            node = parent[node];
+        }
+    }
+
+    /**
+     * opj_tgt_encode: writes the bits that tell a decoder whether the leaf's value is below
+     * {@code threshold}, and if so the value itself.
+     */
+    public void encode(PacketBitWriter bio, int leaf, int threshold) {
+        if (known == null) known = new boolean[value.length];
+        int sp = 0;
+        int node = leaf;
+        while (parent[node] >= 0) {
+            stack[sp++] = node;
+            node = parent[node];
+        }
+        int lo = 0;
+        for (;;) {
+            if (lo > low[node]) {
+                low[node] = lo;
+            } else {
+                lo = low[node];
+            }
+            while (lo < threshold) {
+                if (lo >= value[node]) {
+                    if (!known[node]) {
+                        bio.putBit(1);
+                        known[node] = true;
+                    }
+                    break;
+                }
+                bio.putBit(0);
+                ++lo;
+            }
+            low[node] = lo;
+            if (sp == 0) {
+                break;
+            }
+            node = stack[--sp];
+        }
     }
 
     /**

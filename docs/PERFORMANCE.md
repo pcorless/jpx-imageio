@@ -105,6 +105,14 @@ in a micro-benchmark, no change end to end: the pass is memory-bound).
 3. ~~Fuse ICT, level shift and clamp~~: done, about +3%. `Math.rint` stays: it is exact,
    and the level shift no longer shows as a separate cost in the profile worth chasing.
 4. ~~5/3 vertical pass in column blocks~~: done (2026-10-20), below.
+5. Input copies (nice to have, memory rather than speed): `Jpeg2000ImageReader.setInput` copies
+   the stream through a `ByteArrayOutputStream` and `toByteArray()`. When `in.length()` is known,
+   allocate the exact `byte[]` and `readFully` instead; keep the loop for unknown lengths
+   (`MemoryCacheImageInputStream` reports -1). A PDF stream fed through ImageIO is copied about
+   three times (`MemoryCacheImageInputStream` cache, the buffer, `toByteArray`); callers that
+   already hold the bytes, such as ICEpdf, can call `Jpeg2000Decoder` directly with no copy.
+   I/O is well under 1% of decode time, so expect no MP/s change. NIO (mapped files) doesn't
+   fit: the core works on heap `byte[]`, and PDF streams are already in memory.
 
 ## 5/3 vertical pass in column blocks (2026-10-20)
 

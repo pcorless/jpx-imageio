@@ -330,6 +330,12 @@ public class ImageWriterContractTest {
         ImageWriteParam two = w.getDefaultWriteParam();
         two.setSourceBands(new int[]{0, 1});
         assertThrows(IIOException.class, () -> w.write(null, new IIOImage(ok, null, null), two));
+        Jpeg2000ImageWriteParam small = new Jpeg2000ImageWriteParam();
+        small.setMaxSamples(8 * 8 * 3 - 1);
+        ByteArrayOutputStream none = new ByteArrayOutputStream();
+        w.setOutput(new MemoryCacheImageOutputStream(none));
+        assertThrows(io.github.pcorless.jpx.JpxException.class, () -> w.write(null, new IIOImage(ok, null, null), small));
+        assertEquals(0, none.size());
         assertNull(w.getDefaultStreamMetadata(null));
         assertNull(w.getDefaultImageMetadata(ImageTypeSpecifier.createFromRenderedImage(ok), null));
         IndexColorModel icm = new IndexColorModel(8, 2, new byte[]{0, (byte) 255}, new byte[]{0, 0}, new byte[]{0, 0});

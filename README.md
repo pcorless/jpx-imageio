@@ -74,6 +74,8 @@ param.setCompressionQuality(0.8f);                             // lossy (9/7), a
   per quality: `docs/IMAGEIO-WRITER-CONTRACT.md`.
 - Indexed images are written as grey or RGB; alpha is left out with a warning; 16-bit, CMYK and
   premultiplied alpha are refused. No JP2 boxes, so no colour space, ICC or alpha in the file.
+- The reader's size limit applies: more than 2^28 samples is refused before anything is read
+  (`Jpeg2000ImageWriteParam.setMaxSamples` changes it).
 - Without ImageIO: `Jpeg2000Encoder.encode(samples, width, height, components, options)`.
 - Encoding runs on the same threads as decoding: on 8 threads about 39 MP/s lossless and 90 MP/s
   at quality 0.8 (photos, 8000 x 6000 included); on one thread about the speed of `opj_compress`.

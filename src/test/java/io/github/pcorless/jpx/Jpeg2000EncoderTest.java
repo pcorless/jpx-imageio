@@ -32,6 +32,7 @@ import java.util.concurrent.Executors;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class Jpeg2000EncoderTest {
@@ -202,6 +203,79 @@ public class Jpeg2000EncoderTest {
         } finally {
             pool.shutdown();
         }
+    }
+
+    @DisplayName("over 2^15 wide or high: several precincts per resolution, lossless and lossy")
+    @Test
+    public void severalPrecincts() throws Exception {
+        int[][] sizes = {{40000, 8, 1}, {8, 40000, 3}, {70000, 2, 3}};
+        for (int[] s : sizes) {
+            byte[] px = picture(s[0], s[1], s[2], s[0] + s[1]);
+            byte[] j2k = Jpeg2000Encoder.encode(px, s[0], s[1], s[2], new Jpeg2000Encoder.Options());
+            int[] got = decodeInterleaved(j2k, s[2]);
+            for (int i = 0; i < px.length; i++) {
+                if ((px[i] & 0xff) != got[i]) assertEquals(px[i] & 0xff, got[i], s[0] + "x" + s[1] + " at " + i);
+            }
+            byte[] lossy = Jpeg2000Encoder.encode(px, s[0], s[1], s[2], new Jpeg2000Encoder.Options().quality(0.9f));
+            assertTrue(psnr(px, decodeInterleaved(lossy, s[2])) > 40, s[0] + "x" + s[1]);
+        }
+    }
+
+    @DisplayName("more guard bits: same samples, fewer zero bit-planes signalled; QCD says how many")
+    @Test
+    public void guardBits() throws Exception {
+        int w = 150, h = 90;
+        byte[] px = picture(w, h, 3, 21);
+        int[] lossy2 = null;
+        for (int g = 2; g <= 7; g++) {
+            byte[] j2k = Jpeg2000Encoder.encode(px, w, h, 3, new Jpeg2000Encoder.Options().minGuardBits(g));
+            assertEquals(g, CodestreamReader.read(j2k, 0, j2k.length).coding(0).components[0].guardBits);
+            int[] got = decodeInterleaved(j2k, 3);
+            for (int i = 0; i < px.length; i++) {
+                if ((px[i] & 0xff) != got[i]) assertEquals(px[i] & 0xff, got[i], "guard bits " + g + " at " + i);
+            }
+            byte[] lossy = Jpeg2000Encoder.encode(px, w, h, 3, new Jpeg2000Encoder.Options().quality(0.7f).minGuardBits(g));
+            int[] l = decodeInterleaved(lossy, 3);
+            if (lossy2 == null) lossy2 = l;
+            else assertArrayEquals(lossy2, l, "lossy, guard bits " + g);
+        }
+    }
+
+    @DisplayName("guard bits follow the code-blocks' bit-planes; more than 7 is refused")
+    @Test
+    public void guardBitsFromBitPlanes() throws Exception {
+        Jpeg2000Encoder.Band[] bands = Jpeg2000Encoder.bands(64, 64, 1);
+        int[] exponent = {8, 9, 9, 10};
+        Jpeg2000Encoder.Coded[][] coded = new Jpeg2000Encoder.Coded[4][];
+        for (int b = 0; b < 4; b++) {
+            coded[b] = new Jpeg2000Encoder.Coded[bands[b].numBlocks()];
+            java.util.Arrays.fill(coded[b], new Jpeg2000Encoder.Coded(exponent[b] + 1, 1, new byte[1]));
+        }
+        assertEquals(2, Jpeg2000Encoder.guardBits(bands, coded, exponent, 2), "Mb = exponent + 1 fits 2");
+        coded[3][0] = new Jpeg2000Encoder.Coded(exponent[3] + 3, 1, new byte[1]);
+        assertEquals(4, Jpeg2000Encoder.guardBits(bands, coded, exponent, 2));
+        coded[1][0] = new Jpeg2000Encoder.Coded(exponent[1] + 7, 1, new byte[1]);
+        assertThrows(JpxException.class, () -> Jpeg2000Encoder.guardBits(bands, coded, exponent, 2));
+    }
+
+    @DisplayName("size limit: refused before a row is read, as the decoder's limit")
+    @Test
+    public void sizeLimit() throws Exception {
+        boolean[] read = {false};
+        Jpeg2000Encoder.Source src = () -> (y, dest) -> read[0] = true;
+        JpxException e = assertThrows(JpxException.class, () -> Jpeg2000Encoder.encode(src, 10, 10, 3,
+                new Jpeg2000Encoder.Options().maxSamples(299), new ByteArrayOutputStream()));
+        assertTrue(e.isUnsupported());
+        assertTrue(e.getMessage().contains("300"), e.getMessage());
+        assertFalse(read[0]);
+        assertTrue(Jpeg2000Encoder.encode(src, 10, 10, 3, new Jpeg2000Encoder.Options().maxSamples(300),
+                new ByteArrayOutputStream()));
+        read[0] = false;
+        long def = Jpeg2000Decoder.defaultMaxSamples();
+        int side = (int) Math.sqrt(def) + 1;
+        assertThrows(JpxException.class, () -> Jpeg2000Encoder.encode(src, side, side, 1, new Jpeg2000Encoder.Options(),
+                new ByteArrayOutputStream()));
+        assertFalse(read[0]);
     }
 
     @DisplayName("progress can stop the encode, which then writes nothing")

@@ -325,8 +325,12 @@ code, which isn't ported). `Jpeg2000Layout` decides, ORIGINAL:
 - **Levels:** 5 (OpenJPEG's default), capped at floor(log2(min(width, height))) so no sub-band is
   empty; OpenJPEG refuses an image too small for its levels instead.
 - **Guard bits:** 2, as OpenJPEG, unless a code-block's bit-planes need more (chosen after tier-1,
-  which doesn't depend on them). 2 always sufficed in the tests; the check keeps a pathological image
-  from writing a stream that decoders reject.
+  which doesn't depend on them). 2 always sufficed on real images; the check keeps a pathological
+  image from writing a stream that decoders reject. Streams forced to 3-7 guard bits decode the same
+  in OpenJPEG 2.5.4 and this decoder (`Jpeg2000EncoderTest.guardBits`).
+- **Size limit:** the reader's (D-22), 2^28 samples by default, checked before a row is read. The
+  encoder holds every sample as a 4-byte int or float, so an unchecked huge image means an
+  `OutOfMemoryError` deep in the encode instead of a clear refusal.
 - **Images:** alpha is left out with a warning rather than refused (a burned image usually comes from
   an ARGB buffer that is opaque); premultiplied alpha is refused, since the colours alone would be
   wrong; an indexed image becomes grey or RGB from its palette.

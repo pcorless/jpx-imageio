@@ -18,7 +18,16 @@ dictionary, so there are no JP2 boxes.
   norm (OpenJPEG's `opj_dwt_calc_explicit_stepsizes` with its unit step scaled), so every band adds
   about the same error. No rate-distortion optimisation and no rate control: you choose a quality,
   not a size.
-- Guard bits: 2 (OpenJPEG's default), more only if a code-block needs them.
+- Guard bits: 2 (OpenJPEG's default), more only if a code-block needs them (3-7 checked to
+  decode the same in both decoders).
+- No precincts are signalled, so a resolution wider or taller than 2^15 has several (the default
+  precinct size); checked on 40000 x 8, 8 x 40000 and 70000 x 2 images in both decoders.
+- Size limit: an image of more than 2^28 samples (width x height x components, after the source
+  region and subsampling) is refused before a row is read, with a `JpxException` whose
+  `isUnsupported()` is true. Same limit and property as the reader
+  (`-Dio.github.pcorless.jpx.maxSamples`); `Jpeg2000ImageWriteParam.setMaxSamples` or
+  `Jpeg2000Encoder.Options.maxSamples` change it. At the limit the encoder holds about 1 GB of
+  samples (4 bytes each), plus the source image.
 - Out of scope: more than one layer, rate control, ROI, precincts, tiles, 16-bit, palette, ICC,
   alpha, CMYK, a JP2 wrapper.
 
@@ -52,7 +61,8 @@ dictionary, so there are no JP2 boxes.
     lossless. No compression types. `isCompressionLossless` is true at quality 1.
   - source region, source subsampling with offsets, source bands: honoured.
   - destination offset and destination type: don't apply to a codestream, ignored.
-  - `Jpeg2000ImageWriteParam.setLevels` and `setThreads`; a plain `ImageWriteParam` works too.
+  - `Jpeg2000ImageWriteParam.setLevels`, `setThreads` and `setMaxSamples`; a plain
+    `ImageWriteParam` works too.
 - Metadata: none is written. `getDefault*Metadata` and `convert*Metadata` return null; metadata and
   thumbnails passed in are left out with a warning.
 - Listeners: `IIOWriteProgressListener` (started, progress as code-blocks finish, complete) and

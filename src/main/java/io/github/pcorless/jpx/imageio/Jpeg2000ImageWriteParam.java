@@ -26,12 +26,13 @@ import java.util.Locale;
 /**
  * ImageWriteParam for {@link Jpeg2000ImageWriter}. Compression is always on: lossless unless the
  * mode is {@link #MODE_EXPLICIT} with a quality below 1, which writes lossy (9/7) with step
- * sizes from {@link Jpeg2000Encoder#baseStep(float)}. Also the decomposition levels and threads.
+ * sizes from {@link Jpeg2000Encoder#baseStep(float)}. Also the decomposition levels, threads and size limit.
  */
 public class Jpeg2000ImageWriteParam extends ImageWriteParam {
 
     private Jpeg2000Threads threads;
     private int levels = -1;
+    private long maxSamples;
 
     public Jpeg2000ImageWriteParam() {
         this(Locale.getDefault());
@@ -85,5 +86,18 @@ public class Jpeg2000ImageWriteParam extends ImageWriteParam {
 
     public int getLevels() {
         return levels;
+    }
+
+    /**
+     * The most samples (width x height x components, after the source region and subsampling)
+     * the write may take; zero or less means {@link io.github.pcorless.jpx.Jpeg2000Decoder#defaultMaxSamples()},
+     * the reader's limit. A larger image fails with a {@link io.github.pcorless.jpx.JpxException}.
+     */
+    public void setMaxSamples(long maxSamples) {
+        this.maxSamples = maxSamples;
+    }
+
+    public long getMaxSamples() {
+        return maxSamples;
     }
 }

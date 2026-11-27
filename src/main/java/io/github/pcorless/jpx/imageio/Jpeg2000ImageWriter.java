@@ -124,6 +124,7 @@ public class Jpeg2000ImageWriter extends ImageWriter {
             o.quality(jp.effectiveQuality());
             if (jp.getLevels() >= 0) o.levels(jp.getLevels());
             threads = jp.getThreads();
+            o.maxSamples(jp.getMaxSamples());
         } else if (param != null && param.canWriteCompressed() && param.getCompressionMode() == ImageWriteParam.MODE_EXPLICIT) {
             o.quality(param.getCompressionQuality());
         }

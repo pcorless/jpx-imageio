@@ -204,6 +204,9 @@ public final class Jpeg2000Encoder {
     public static final class Options {
         float quality = 1f;
         int levels = -1;
+        long maxSamples;
+        /** Tests only: guard bits to use at least (the encoder may still need more). */
+        int minGuardBits = MIN_GUARD_BITS;
         Jpeg2000Threads threads;
         Progress progress;
 
@@ -232,6 +235,23 @@ public final class Jpeg2000Encoder {
         /** Threads to use; {@link Jpeg2000Threads#defaults()} when not set. */
         public Options threads(Jpeg2000Threads threads) {
             this.threads = threads;
+            return this;
+        }
+
+        /**
+         * The most samples (width x height x components) the encode may take, as the decoder's
+         * limit and with the same default: {@link Jpeg2000Decoder#defaultMaxSamples()} when not set
+         * or not positive. The encoder holds every sample as a 4-byte int or float.
+         */
+        public Options maxSamples(long maxSamples) {
+            this.maxSamples = maxSamples;
+            return this;
+        }
+
+        /** Tests only: at least {@code g} guard bits (2-7). */
+        Options minGuardBits(int g) {
+            if (g < MIN_GUARD_BITS || g > 7) throw new IllegalArgumentException("guard bits " + g);
+            this.minGuardBits = g;
             return this;
         }
 
@@ -282,6 +302,9 @@ public final class Jpeg2000Encoder {
             throw JpxException.unsupported("encoding " + width + "x" + height + " (one tile, over 2^31 samples)");
         }
         Options o = options != null ? options : new Options();
+        long max = o.maxSamples > 0 ? o.maxSamples : Jpeg2000Decoder.defaultMaxSamples();
+        long samples = (long) width * height * numComponents;
+        if (samples > max) throw JpxException.tooLarge("image to encode", samples, max);
         Jpeg2000Threads threads = o.threads != null ? o.threads : Jpeg2000Threads.defaults();
         boolean reversible = o.reversible();
         int levels = Math.min(o.levels >= 0 ? o.levels : DEFAULT_LEVELS, maxLevels(width, height));
@@ -309,7 +332,7 @@ public final class Jpeg2000Encoder {
         Coded[][] coded = codeBlocks(bands, ints, floats, width, step, numComponents, threads, o.progress);
         if (coded == null) return false;
 
-        int guardBits = guardBits(bands, coded, exponent);
+        int guardBits = guardBits(bands, coded, exponent, o.minGuardBits);
 
         // tier-2: the packets, LRCP with one layer
         List<byte[]> headers = new ArrayList<>();
@@ -551,8 +574,8 @@ public final class Jpeg2000Encoder {
      * Guard bits so that every code-block's bit-planes fit under its band's Mb = exponent + G - 1
      * (E-2); OpenJPEG's 2 unless the data needs more.
      */
-    static int guardBits(Band[] bands, Coded[][] coded, int[] exponent) throws JpxException {
-        int g = MIN_GUARD_BITS;
+    static int guardBits(Band[] bands, Coded[][] coded, int[] exponent, int minGuardBits) throws JpxException {
+        int g = minGuardBits;
         for (int i = 0; i < coded.length; i++) {
             int b = i % bands.length;
             for (Coded c : coded[i]) g = Math.max(g, c.numBitPlanes - exponent[b] + 1);

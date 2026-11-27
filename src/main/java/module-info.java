@@ -25,5 +25,6 @@ module io.github.pcorless.jpx {
     exports io.github.pcorless.jpx.imageio;
 
     provides javax.imageio.spi.ImageReaderSpi with io.github.pcorless.jpx.imageio.Jpeg2000ImageReaderSpi;
-    provides javax.imageio.spi.ImageWriterSpi with io.github.pcorless.jpx.imageio.Jpeg2000ImageWriterSpi;
+    provides javax.imageio.spi.ImageWriterSpi with io.github.pcorless.jpx.imageio.Jp2ImageWriterSpi,
+            io.github.pcorless.jpx.imageio.Jpeg2000ImageWriterSpi;
 }

@@ -46,6 +46,7 @@ JJ2000 / jai-imageio-jpeg2000 is a black-box oracle only; its source is never co
 | `src/main/java/io/github/pcorless/jpx/Jpeg2000Image.java` | ORIGINAL | (colour-space table as `opj_jp2_read_header`, T.800 Table I.10) | Apache-2.0 | |
 | `src/main/java/io/github/pcorless/jpx/jp2/Jp2Header.java` | ADAPTED + SPEC | OpenJPEG `jp2.h` @ 6c4a29b0: decoder fields of `opj_jp2_t`, `opj_jp2_color_t`, `opj_jp2_pclr_t`, `opj_jp2_cmap_comp_t`, `opj_jp2_cdef_info_t`, box constants; T.800 I.5.3.7 (res) | BSD-2 | keeps every colr box; res fields |
 | `src/main/java/io/github/pcorless/jpx/jp2/Jp2Reader.java` | ADAPTED + SPEC | OpenJPEG `jp2.c` @ 6c4a29b0: `opj_jp2_read_header_procedure`, `read_boxhdr`, `read_boxhdr_char`, `read_jp`, `read_ftyp`, `read_jp2h`, `read_ihdr`, `read_bpcc`, `read_colr`, `read_pclr`, `read_cmap`, `read_cdef`, checks of `opj_jp2_read_header`; T.800 I.5.3.7 (res) | BSD-2 | byte range not stream; later colr boxes kept, never fatal; res read leniently |
+| `src/main/java/io/github/pcorless/jpx/jp2/Jp2Writer.java` | SPEC | T.800 (06/2019) I.4 (boxes, XLBox), I.5.1 (signature), I.5.2 (ftyp), I.5.3 (jp2h), I.5.3.1 (ihdr, Table I.2), I.5.3.3 (colr, Tables I.9-I.10), I.5.4 (jp2c) | Apache-2.0 | written from the spec; byte-identical to `opj_compress`'s JP2 fixtures (less COM) |
 | `src/main/java/io/github/pcorless/jpx/jp2/Jp2Channels.java` | PORTED | OpenJPEG `jp2.c` @ 6c4a29b0: `opj_jp2_apply_color_postprocessing`, `opj_jp2_check_color`, `opj_jp2_apply_pclr`, `opj_jp2_apply_cdef` | BSD-2 | works on copies; cdef type → `Component.channelType`; a box that fails its check is skipped, not fatal (D-23) |
 | `src/main/java/io/github/pcorless/jpx/Jpeg2000Threads.java` | ORIGINAL | | Apache-2.0 | thread settings, default pool |
 | `src/main/java/io/github/pcorless/jpx/internal/Parallel.java` | ORIGINAL | | Apache-2.0 | caller-helps parallel loops |
@@ -56,6 +57,7 @@ JJ2000 / jai-imageio-jpeg2000 is a black-box oracle only; its source is never co
 | `src/main/java/io/github/pcorless/jpx/imageio/Jpeg2000ColorSpaces.java` | ORIGINAL | | Apache-2.0 | uncalibrated CMYK and n-channel spaces |
 | `src/main/java/io/github/pcorless/jpx/imageio/Jpeg2000Metadata.java` | ORIGINAL | (javax_imageio_1.0 DTD; T.800 I.5.3.7) | Apache-2.0 | |
 | `src/main/java/io/github/pcorless/jpx/imageio/Jpeg2000ImageWriterSpi.java` | ORIGINAL | (javax.imageio SPI contract) | Apache-2.0 | |
+| `src/main/java/io/github/pcorless/jpx/imageio/Jp2ImageWriterSpi.java` | ORIGINAL | (javax.imageio SPI contract) | Apache-2.0 | `jp2` / `jpeg2000`, writes JP2 |
 | `src/main/java/io/github/pcorless/jpx/imageio/Jpeg2000ImageWriter.java` | ORIGINAL | (javax.imageio ImageWriter contract) | Apache-2.0 | |
 | `src/main/java/io/github/pcorless/jpx/imageio/Jpeg2000ImageWriteParam.java` | ORIGINAL | | Apache-2.0 | quality, levels, threads |
 | `src/main/java/io/github/pcorless/jpx/imageio/Jpeg2000WriterSource.java` | ORIGINAL | (java.awt.image raster access) | Apache-2.0 | rows through `getDataElements` |

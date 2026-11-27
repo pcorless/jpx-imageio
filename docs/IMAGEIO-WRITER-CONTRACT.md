@@ -1,11 +1,11 @@
 # JPEG 2000 writer: ImageIO contract
 
-_GH-2. First use: ICEpdf redaction (pcorless/icepdf#697) writes a burned JPXDecode image back as
-JPEG 2000 instead of Flate RGB._
+_GH-2, JP2 files GH-4. First use: ICEpdf redaction (pcorless/icepdf#697) writes a burned
+JPXDecode image back as JPEG 2000 instead of Flate RGB._
 
-A deliberately basic encoder behind a normal `javax.imageio` writer. It writes what PDF's
-`JPXDecode` takes, a raw JPEG 2000 codestream (J2K); the colour space comes from the PDF
-dictionary, so there are no JP2 boxes.
+A deliberately basic encoder behind a normal `javax.imageio` writer. It writes a JP2 file
+(`jp2`, `jpeg2000`) or a raw JPEG 2000 codestream (J2K, `j2k`). PDF's `JPXDecode` takes either;
+with a codestream the colour space comes only from the PDF dictionary.
 
 **What it writes**
 - 8-bit unsigned grey (1 component) or RGB (3 components, with the multiple component transform).
@@ -28,17 +28,35 @@ dictionary, so there are no JP2 boxes.
   (`-Dio.github.pcorless.jpx.maxSamples`); `Jpeg2000ImageWriteParam.setMaxSamples` or
   `Jpeg2000Encoder.Options.maxSamples` change it. At the limit the encoder holds about 1 GB of
   samples (4 bytes each), plus the source image.
-- Out of scope: more than one layer, rate control, ROI, precincts, tiles, 16-bit, palette, ICC,
-  alpha, CMYK, a JP2 wrapper.
+- Out of scope: more than one layer, rate control, ROI, precincts, tiles, 16-bit, palette,
+  alpha, CMYK, JPX (Part 2) boxes, `res`/XML/UUID boxes.
+
+**JP2 files** (T.800 Annex I)
+- Boxes: signature, `ftyp` (brand `jp2 `, minor version 0, compatible with `jp2 `), `jp2h` with
+  `ihdr` (unsigned 8-bit, C = 7, colour space known, no IPR) and one `colr`, then `jp2c` with the
+  codestream (XLBox when it is over 4 GB). The same boxes `opj_compress` writes: with the lossless
+  defaults the file is byte for byte its `.jp2`, less the COM marker in the codestream.
+- `colr`: method 1, enumerated sRGB (16) or greyscale (17), for sRGB images, Java's built-in
+  grey (`BYTE_GRAY`), indexed images (written as grey or RGB), rasters and picked source bands.
+  Method 2 (restricted ICC) with the image's own profile for any other grey or RGB
+  `ICC_ColorSpace` whose profile is a grey TRC or an RGB matrix/TRC one (for example
+  `CS_LINEAR_RGB`, Adobe RGB). Anything else (LUT profiles such as `CS_PYCC`, Lab, non-RGB
+  three-component spaces) is refused for JP2 with an `IIOException` that points at J2K, which
+  writes the components as they are.
 
 **Registration**
 - `META-INF/services/javax.imageio.spi.ImageWriterSpi`, plus `provides` in `module-info`.
-- Format names `jpeg2000`, `JPEG2000`, `jpeg 2000`, `JPEG 2000`, `j2k`, `J2K`; suffixes `j2k`,
-  `j2c`. Not `jp2`: the output is a codestream, not a JP2 file. No MIME type (none is registered
-  for a raw codestream).
-- The reader and writer SPIs name each other, so `ImageIO.getImageWriter(reader)` and
-  `getImageReader(writer)` work.
-- `canEncodeImage` is true for the images below and false for the rest.
+- Two writer SPIs, one writer class (D-25):
+  - `Jp2ImageWriterSpi`, JP2 files: format names `jp2`, `JP2`, `jpeg2000`, `JPEG2000`,
+    `jpeg 2000`, `JPEG 2000`; suffix `jp2`; MIME type `image/jp2`.
+  - `Jpeg2000ImageWriterSpi`, codestreams: format names `j2k`, `J2K`; suffixes `j2k`, `j2c`; no
+    MIME type (none is registered for a raw codestream).
+- A writer takes its format from the SPI that made it; `Jpeg2000ImageWriteParam.setFormat`
+  (`J2K` or `JP2`) overrides that either way.
+- The reader and writer SPIs name each other, so `ImageIO.getImageWriter(reader)` (the JP2 one)
+  and `getImageReader(writer)` work.
+- `canEncodeImage` is true for the images below and false for the rest; the JP2 SPI also needs a
+  colour space a `colr` box can describe.
 
 **Images**
 - Any `RenderedImage` or `Raster` with 8-bit samples and 1 or 3 colour components: the
@@ -61,7 +79,7 @@ dictionary, so there are no JP2 boxes.
     lossless. No compression types. `isCompressionLossless` is true at quality 1.
   - source region, source subsampling with offsets, source bands: honoured.
   - destination offset and destination type: don't apply to a codestream, ignored.
-  - `Jpeg2000ImageWriteParam.setLevels`, `setThreads` and `setMaxSamples`; a plain
+  - `Jpeg2000ImageWriteParam.setFormat`, `setLevels`, `setThreads` and `setMaxSamples`; a plain
     `ImageWriteParam` works too.
 - Metadata: none is written. `getDefault*Metadata` and `convert*Metadata` return null; metadata and
   thumbnails passed in are left out with a warning.
@@ -76,7 +94,8 @@ dictionary, so there are no JP2 boxes.
   taken, so a host's image keeps its Java2D acceleration. A `RenderedImage` with several tiles is
   copied once (`getData`) first.
 - Without ImageIO: `Jpeg2000Encoder.encode(bytes, width, height, components, options)` for
-  interleaved samples, or `encode(source, ..., out)` with a row source and an `OutputStream`.
+  interleaved samples, or `encode(source, ..., out)` with a row source and an `OutputStream`;
+  `Options.format(JP2)` and `Options.iccProfile(bytes)` for a JP2 file.
 
 **Tests:** `ImageWriterContractTest` (these checks), `Jpeg2000EncoderTest` (round trips at every
 size, the opj_compress byte identity on the fixtures, lossy quality, threads, progress),
@@ -107,3 +126,11 @@ Most corpus streams were lossy 9/7 to begin with (`PERFORMANCE.md`), which is wh
 re-encode at over 55 dB at high qualities; the synthetic images (gradients plus Gaussian noise, sigma 6) are harder, at
 49.6 dB / 11.2 bpp (q 0.95), 43.5 dB / 7.8 bpp (q 0.8) and 33.3 dB / 1.2 bpp (q 0.5) for
 1023 x 769 RGB.
+
+**JP2 status (2026-11-27):** `Jpeg2000EncoderTest.jp2MatchesOpenJpeg` (byte-identical to the
+`jp2-gray`, `jp2-rgb` and `jp2-icc-gray` fixtures, less COM) and `ImageWriterContractTest`
+(lookups, colour choice, ICC written and read back, refusal, `setFormat`) pass. `WriterCheck` with
+`-Dformat=jp2`: all 189 files decode in `opj_decompress` 2.5.4 identically to this decoder, with
+the same PSNR as the J2K run. Not checked: how another decoder applies an ICC profile we write
+(the local OpenJPEG builds have no LittleCMS, so they ignore ICC); the profile bytes are checked
+in the file, and this reader with Java's CMM converts as the original colour space does.

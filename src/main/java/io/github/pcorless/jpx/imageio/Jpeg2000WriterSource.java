@@ -20,6 +20,9 @@ package io.github.pcorless.jpx.imageio;
 import io.github.pcorless.jpx.Jpeg2000Encoder;
 
 import java.awt.Rectangle;
+import java.awt.color.ColorSpace;
+import java.awt.color.ICC_ColorSpace;
+import java.awt.color.ICC_Profile;
 import java.awt.image.BufferedImage;
 import java.awt.image.ColorModel;
 import java.awt.image.ComponentSampleModel;
@@ -48,6 +51,10 @@ final class Jpeg2000WriterSource {
     final int numComponents;
     /** True when an alpha band is left out. */
     final boolean alphaDropped;
+    /** For JP2: the ICC profile to write, or null for the enumerated sRGB / greyscale space. */
+    final byte[] jp2Icc;
+    /** For JP2: why the colour space can't be described, or null when it can. */
+    final String jp2Refusal;
 
     private final Raster raster;
     private final int x0, y0, xStep, yStep;
@@ -58,7 +65,8 @@ final class Jpeg2000WriterSource {
     private final byte[][] palette;
 
     private Jpeg2000WriterSource(Raster raster, int x0, int y0, int width, int height, int xStep, int yStep,
-                                 int[] bands, Path path, byte[][] palette, boolean alphaDropped) {
+                                 int[] bands, Path path, byte[][] palette, boolean alphaDropped,
+                                 byte[] jp2Icc, String jp2Refusal) {
         this.raster = raster;
         this.x0 = x0;
         this.y0 = y0;
@@ -71,6 +79,8 @@ final class Jpeg2000WriterSource {
         this.path = path;
         this.palette = palette;
         this.alphaDropped = alphaDropped;
+        this.jp2Icc = jp2Icc;
+        this.jp2Refusal = jp2Refusal;
         SampleModel sm = raster.getSampleModel();
         this.bitOffsets = sm instanceof SinglePixelPackedSampleModel ? ((SinglePixelPackedSampleModel) sm).getBitOffsets() : null;
     }
@@ -150,7 +160,44 @@ final class Jpeg2000WriterSource {
                 path = Path.SAMPLES;
             }
         }
-        return new Jpeg2000WriterSource(r, x0, y0, w, h, xStep, yStep, bands, path, palette, alphaDropped);
+        int nc = palette != null ? palette.length : bands.length;
+        byte[][] icc = new byte[1][];
+        String refusal = jp2Colour(cm, sourceBands, nc, icc);
+        return new Jpeg2000WriterSource(r, x0, y0, w, h, xStep, yStep, bands, path, palette, alphaDropped, icc[0], refusal);
+    }
+
+    /**
+     * How a JP2 colr box describes the components (T.800 I.5.3.3): null with {@code icc[0]} null
+     * for the enumerated sRGB or greyscale space, null with {@code icc[0]} set for a restricted ICC
+     * profile, or the reason neither fits. A raster, picked source bands or a palette expanded to
+     * grey/RGB are taken as sRGB / greyscale.
+     */
+    static String jp2Colour(ColorModel cm, int[] sourceBands, int numComponents, byte[][] icc) {
+        if (cm == null || sourceBands != null || cm instanceof IndexColorModel) return null;
+        ColorSpace cs = cm.getColorSpace();
+        if (numComponents == 3 && cs.isCS_sRGB()) return null;
+        if (numComponents == 1 && cs == ColorSpace.getInstance(ColorSpace.CS_GRAY)) return null;
+        int want = numComponents == 1 ? ColorSpace.TYPE_GRAY : ColorSpace.TYPE_RGB;
+        if (cs.getType() == want && cs instanceof ICC_ColorSpace) {
+            ICC_Profile p = ((ICC_ColorSpace) cs).getProfile();
+            if (restricted(p, numComponents)) {
+                icc[0] = p.getData();
+                return null;
+            }
+            return "can't write this colour space in a JP2 file: its ICC profile isn't a grey TRC or RGB "
+                    + "matrix/TRC one (restricted ICC, T.800 I.5.3.3); write J2K, or convert the image to sRGB";
+        }
+        return "can't write a colour space of type " + cs.getType() + " with " + numComponents
+                + " component(s) in a JP2 file (grey or RGB only); write J2K, or convert the image to sRGB";
+    }
+
+    /** A monochrome (grey TRC) or three-component matrix-based (colorants and TRCs) profile. */
+    private static boolean restricted(ICC_Profile p, int numComponents) {
+        if (numComponents == 1) return p.getData(ICC_Profile.icSigGrayTRCTag) != null;
+        int[] tags = {ICC_Profile.icSigRedColorantTag, ICC_Profile.icSigGreenColorantTag, ICC_Profile.icSigBlueColorantTag,
+                ICC_Profile.icSigRedTRCTag, ICC_Profile.icSigGreenTRCTag, ICC_Profile.icSigBlueTRCTag};
+        for (int t : tags) if (p.getData(t) == null) return false;
+        return true;
     }
 
     /** One array per component (grey if every entry is grey, else R, G, B). */

@@ -18,6 +18,7 @@
 package io.github.pcorless.jpx.imageio;
 
 import io.github.pcorless.jpx.Jpeg2000Encoder;
+import io.github.pcorless.jpx.Jpeg2000Encoder.Format;
 import io.github.pcorless.jpx.Jpeg2000Threads;
 
 import javax.imageio.ImageWriteParam;
@@ -33,6 +34,7 @@ public class Jpeg2000ImageWriteParam extends ImageWriteParam {
     private Jpeg2000Threads threads;
     private int levels = -1;
     private long maxSamples;
+    private Format format;
 
     public Jpeg2000ImageWriteParam() {
         this(Locale.getDefault());
@@ -67,6 +69,18 @@ public class Jpeg2000ImageWriteParam extends ImageWriteParam {
     /** The quality the write uses: 1 (lossless) unless the mode is explicit. */
     float effectiveQuality() {
         return getCompressionMode() == MODE_EXPLICIT ? getCompressionQuality() : 1f;
+    }
+
+    /**
+     * J2K (a raw codestream) or JP2 (a file with a colour space); null (the default) means the
+     * writer's own: JP2 for a writer found as {@code jp2}/{@code jpeg2000}, J2K for {@code j2k}.
+     */
+    public void setFormat(Format format) {
+        this.format = format;
+    }
+
+    public Format getFormat() {
+        return format;
     }
 
     /** Null means {@link Jpeg2000Threads#defaults()}. */

@@ -115,17 +115,28 @@ public class ImageWriterContractTest {
         return img.getRGB(0, 0, img.getWidth(), img.getHeight(), null, 0, img.getWidth());
     }
 
-    @DisplayName("found by format name and suffix; linked to the reader")
+    /** Our writer for a lookup, and the SPI it came from. */
+    static Class<?> spiOf(Iterator<ImageWriter> it) {
+        while (it.hasNext()) {
+            ImageWriter w = it.next();
+            if (w instanceof Jpeg2000ImageWriter) return w.getOriginatingProvider().getClass();
+        }
+        return null;
+    }
+
+    @DisplayName("found by format name, suffix and MIME type: jp2/jpeg2000 write JP2, j2k/j2c codestreams; linked to the reader")
     @Test
     public void lookups() {
-        for (String name : new String[]{"jpeg2000", "JPEG2000", "j2k", "jpeg 2000"}) {
-            assertTrue(ImageIO.getImageWritersByFormatName(name).hasNext(), name);
+        for (String name : new String[]{"jp2", "JP2", "jpeg2000", "JPEG2000", "jpeg 2000"}) {
+            assertSame(Jp2ImageWriterSpi.class, spiOf(ImageIO.getImageWritersByFormatName(name)), name);
         }
-        assertTrue(ImageIO.getImageWritersBySuffix("j2k").hasNext());
-        assertTrue(ImageIO.getImageWritersBySuffix("j2c").hasNext());
-        for (Iterator<ImageWriter> it = ImageIO.getImageWritersBySuffix("jp2"); it.hasNext(); ) {
-            assertFalse(it.next() instanceof Jpeg2000ImageWriter, "a codestream writer must not claim .jp2");
+        for (String name : new String[]{"j2k", "J2K"}) {
+            assertSame(Jpeg2000ImageWriterSpi.class, spiOf(ImageIO.getImageWritersByFormatName(name)), name);
         }
+        assertSame(Jp2ImageWriterSpi.class, spiOf(ImageIO.getImageWritersBySuffix("jp2")));
+        assertSame(Jp2ImageWriterSpi.class, spiOf(ImageIO.getImageWritersByMIMEType("image/jp2")));
+        assertSame(Jpeg2000ImageWriterSpi.class, spiOf(ImageIO.getImageWritersBySuffix("j2k")));
+        assertSame(Jpeg2000ImageWriterSpi.class, spiOf(ImageIO.getImageWritersBySuffix("j2c")));
         ImageWriter w = writer();
         ImageReader r = ImageIO.getImageReader(w);
         assertNotNull(r);
@@ -184,16 +195,109 @@ public class ImageWriterContractTest {
         }
     }
 
-    @DisplayName("ImageIO.write with the format name")
+    static boolean isJp2(byte[] b) {
+        return b.length > 12 && b[3] == 12 && b[4] == 'j' && b[5] == 'P';
+    }
+
+    static boolean isJ2k(byte[] b) {
+        return b.length > 2 && b[0] == (byte) 0xff && b[1] == (byte) 0x4f;
+    }
+
+    @DisplayName("ImageIO.write: jpeg2000 and jp2 give a JP2 file, j2k a codestream")
     @Test
     public void imageIoWrite() throws IOException {
         BufferedImage src = picture(BufferedImage.TYPE_INT_RGB, 64, 40);
+        for (String name : new String[]{"jpeg2000", "jp2", "j2k"}) {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            assertTrue(ImageIO.write(src, name, bytes), name);
+            byte[] b = bytes.toByteArray();
+            assertTrue(name.equals("j2k") ? isJ2k(b) : isJp2(b), name);
+            assertArrayEquals(rgb(src), rgb(ImageIO.read(new ByteArrayInputStream(b))), name);
+        }
+    }
+
+    static byte[] writeWith(ImageWriter w, BufferedImage img, ImageWriteParam param) throws IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        assertTrue(ImageIO.write(src, "jpeg2000", bytes));
-        byte[] j2k = bytes.toByteArray();
-        assertEquals((byte) 0xff, j2k[0]);
-        assertEquals((byte) 0x4f, j2k[1]);
-        assertArrayEquals(rgb(src), rgb(ImageIO.read(new ByteArrayInputStream(j2k))));
+        try (ImageOutputStream out = new MemoryCacheImageOutputStream(bytes)) {
+            w.setOutput(out);
+            w.write(null, new IIOImage(img, null, null), param);
+        }
+        return bytes.toByteArray();
+    }
+
+    static ImageWriter j2kWriter() {
+        return new Jpeg2000ImageWriterSpi().createWriterInstance(null);
+    }
+
+    @DisplayName("JP2 colour: sRGB and grey enumerated, a matrix ICC profile written and read back, others refused")
+    @Test
+    public void jp2Colour() throws IOException {
+        // sRGB and Java's grey: enumerated (method 1), and the reader's colour model says so
+        BufferedImage rgbImg = picture(BufferedImage.TYPE_3BYTE_BGR, 50, 30);
+        BufferedImage back = read(write(rgbImg, null));
+        assertTrue(back.getColorModel().getColorSpace().isCS_sRGB());
+        assertArrayEquals(rgb(rgbImg), rgb(back));
+        BufferedImage grey = picture(BufferedImage.TYPE_BYTE_GRAY, 50, 30);
+        BufferedImage greyBack = read(write(grey, null));
+        assertEquals(ColorSpace.TYPE_GRAY, greyBack.getColorModel().getColorSpace().getType());
+        assertArrayEquals(grey.getRaster().getSamples(0, 0, 50, 30, 0, (int[]) null),
+                greyBack.getRaster().getSamples(0, 0, 50, 30, 0, (int[]) null));
+
+        // linear RGB: a matrix/TRC ICC profile, written as method 2; the reader gives the same profile
+        ColorSpace linear = ColorSpace.getInstance(ColorSpace.CS_LINEAR_RGB);
+        ComponentColorModel cm = new ComponentColorModel(linear, false, false, java.awt.Transparency.OPAQUE, DataBuffer.TYPE_BYTE);
+        WritableRaster r = cm.createCompatibleWritableRaster(40, 20);
+        Random rnd = new Random(4);
+        for (int y = 0; y < 20; y++) for (int x = 0; x < 40; x++) for (int b = 0; b < 3; b++) r.setSample(x, y, b, rnd.nextInt(256));
+        BufferedImage lin = new BufferedImage(cm, r, false, null);
+        assertTrue(new Jp2ImageWriterSpi().canEncodeImage(ImageTypeSpecifier.createFromRenderedImage(lin)));
+        byte[] jp2 = write(lin, null);
+        assertTrue(isJp2(jp2));
+        // the colr box (method 2) holds the profile's bytes as they are
+        byte[] profile = ((java.awt.color.ICC_ColorSpace) linear).getProfile().getData();
+        int colr = 12 + 20 + 8 + 22;
+        assertEquals(2, jp2[colr + 8], "colr method");
+        assertArrayEquals(profile, java.util.Arrays.copyOfRange(jp2, colr + 11, colr + 11 + profile.length));
+        // read back: an ICC colour space that converts as the original (Java's CMM re-serialises a
+        // profile once linked, e.g. a 14-byte gamma curve unpadded, so the bytes are not compared)
+        BufferedImage linBack = read(jp2);
+        ColorSpace cs = linBack.getColorModel().getColorSpace();
+        assertTrue(cs instanceof java.awt.color.ICC_ColorSpace, cs.toString());
+        for (float[] v : new float[][]{{0, 0, 0}, {1, 1, 1}, {0.2f, 0.5f, 0.9f}, {0.7f, 0.1f, 0.3f}}) {
+            float[] want = linear.toRGB(v), got = cs.toRGB(v);
+            for (int i = 0; i < 3; i++) assertEquals(want[i], got[i], 0.01f, "toRGB " + java.util.Arrays.toString(v));
+        }
+        for (int b = 0; b < 3; b++) {
+            assertArrayEquals(r.getSamples(0, 0, 40, 20, b, (int[]) null), linBack.getRaster().getSamples(0, 0, 40, 20, b, (int[]) null));
+        }
+
+        // PhotoYCC (a LUT profile): no JP2 colr box fits; refused for JP2, written as J2K
+        ColorSpace pycc = ColorSpace.getInstance(ColorSpace.CS_PYCC);
+        ComponentColorModel ycm = new ComponentColorModel(pycc, false, false, java.awt.Transparency.OPAQUE, DataBuffer.TYPE_BYTE);
+        BufferedImage ycc = new BufferedImage(ycm, ycm.createCompatibleWritableRaster(8, 8), false, null);
+        assertFalse(new Jp2ImageWriterSpi().canEncodeImage(ImageTypeSpecifier.createFromRenderedImage(ycc)));
+        assertTrue(new Jpeg2000ImageWriterSpi().canEncodeImage(ImageTypeSpecifier.createFromRenderedImage(ycc)));
+        IIOException e = assertThrows(IIOException.class, () -> write(ycc, null));
+        assertTrue(e.getMessage().contains("J2K"), e.getMessage());
+        assertTrue(isJ2k(writeWith(j2kWriter(), ycc, null)));
+    }
+
+    @DisplayName("setFormat overrides the writer's own format, both ways")
+    @Test
+    public void formatParam() throws IOException {
+        BufferedImage src = picture(BufferedImage.TYPE_INT_RGB, 33, 17);
+        Jpeg2000ImageWriteParam toJ2k = new Jpeg2000ImageWriteParam();
+        toJ2k.setFormat(io.github.pcorless.jpx.Jpeg2000Encoder.Format.J2K);
+        byte[] a = write(src, toJ2k);
+        assertTrue(isJ2k(a));
+        Jpeg2000ImageWriteParam toJp2 = new Jpeg2000ImageWriteParam();
+        toJp2.setFormat(io.github.pcorless.jpx.Jpeg2000Encoder.Format.JP2);
+        byte[] b = writeWith(j2kWriter(), src, toJp2);
+        assertTrue(isJp2(b));
+        assertTrue(isJ2k(writeWith(j2kWriter(), src, null)));
+        assertArrayEquals(rgb(read(a)), rgb(read(b)));
+        // the JP2 file is the codestream plus 85 bytes of boxes (signature, ftyp, jp2h, jp2c header)
+        assertEquals(a.length + 12 + 20 + 45 + 8, b.length);
     }
 
     @DisplayName("params: explicit quality, source region, subsampling with offsets, source bands, levels")
@@ -210,7 +314,7 @@ public class ImageWriterContractTest {
         assertFalse(p.isCompressionLossless());
         byte[] lossy = write(src, p);
         byte[] lossless = write(src, null);
-        assertTrue(lossy.length < lossless.length / 2, lossy.length + " vs " + lossless.length);
+        assertTrue(lossy.length < lossless.length * 0.55, lossy.length + " vs " + lossless.length);
         BufferedImage back = read(lossy);
         double se = 0;
         int[] a = rgb(src), b = rgb(back);

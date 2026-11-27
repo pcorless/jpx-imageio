@@ -58,11 +58,13 @@ BufferedImage image = ImageIO.read(new File("photo.jp2"));
 ## Write
 
 A deliberately basic writer for 8-bit grey and RGB, made for putting JPEG 2000 back into PDFs
-(`JPXDecode`): it writes a raw codestream (J2K), one tile, one layer. Lossless by default, and then
-the same bytes as `opj_compress` with its defaults; lossy with a quality below 1.
+(`JPXDecode`): one tile, one layer, as a JP2 file (`jp2`, `jpeg2000`) or a raw codestream (`j2k`).
+Lossless by default, and then the same bytes as `opj_compress` with its defaults; lossy with a
+quality below 1.
 
 ```java
-ImageIO.write(image, "jpeg2000", new File("out.j2k"));        // lossless (5/3)
+ImageIO.write(image, "jp2", new File("out.jp2"));             // JP2 file, lossless (5/3)
+ImageIO.write(image, "j2k", new File("out.j2k"));             // raw codestream
 
 ImageWriter writer = ImageIO.getImageWritersByFormatName("jpeg2000").next();
 ImageWriteParam param = writer.getDefaultWriteParam();
@@ -72,8 +74,10 @@ param.setCompressionQuality(0.8f);                             // lossy (9/7), a
 
 - A quality sets the quantiser's step, not a size: there's no rate control. PSNR and bits per pixel
   per quality: `docs/IMAGEIO-WRITER-CONTRACT.md`.
+- JP2 files carry the colour space: sRGB or greyscale, or the image's own ICC profile when it is
+  a matrix/TRC one; other colour spaces are refused for JP2 (J2K writes them as they are).
 - Indexed images are written as grey or RGB; alpha is left out with a warning; 16-bit, CMYK and
-  premultiplied alpha are refused. No JP2 boxes, so no colour space, ICC or alpha in the file.
+  premultiplied alpha are refused.
 - The reader's size limit applies: more than 2^28 samples is refused before anything is read
   (`Jpeg2000ImageWriteParam.setMaxSamples` changes it).
 - Without ImageIO: `Jpeg2000Encoder.encode(samples, width, height, components, options)`.

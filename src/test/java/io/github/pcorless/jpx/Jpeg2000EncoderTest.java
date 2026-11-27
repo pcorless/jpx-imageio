@@ -122,6 +122,62 @@ public class Jpeg2000EncoderTest {
         assertArrayEquals(theirs, ours, name);
     }
 
+    /**
+     * JP2: opj_compress's JP2 fixtures with lossless defaults (and jp2-icc-gray, the same with an
+     * ICC colr box from tools/fixtures/generate.py): the same boxes and codestream, less COM.
+     */
+    @DisplayName("JP2 output is byte-identical to the opj_compress fixtures (less COM), enumerated and ICC")
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"jp2-gray", "jp2-rgb", "jp2-icc-gray"})
+    public void jp2MatchesOpenJpeg(String name) throws Exception {
+        byte[] theirs = jp2WithoutCom(Jpeg2000DecoderTest.fixture(name + ".jp2"));
+        Jpeg2000Headers h = Jpeg2000Headers.read(theirs, 0, theirs.length);
+        int comps = h.codestream.components.length;
+        int[] dims = new int[2];
+        int[][] planes = new int[comps][];
+        for (int c = 0; c < comps; c++) {
+            planes[c] = Jpeg2000DecoderTest.pgx(Jpeg2000DecoderTest.fixture("ref/" + name + ".full." + c + ".pgx"), dims);
+        }
+        byte[] px = new byte[dims[0] * dims[1] * comps];
+        for (int c = 0; c < comps; c++) for (int i = 0; i < planes[c].length; i++) px[i * comps + c] = (byte) planes[c][i];
+        Jpeg2000Encoder.Options o = new Jpeg2000Encoder.Options().format(Jpeg2000Encoder.Format.JP2);
+        byte[] icc = h.jp2.colours().isEmpty() ? null : h.jp2.colours().get(0).iccProfile;
+        if (icc != null) o.iccProfile(icc);
+        assertArrayEquals(theirs, Jpeg2000Encoder.encode(px, dims[0], dims[1], comps, o), name);
+    }
+
+    @DisplayName("JP2: an ICC profile must match the component count")
+    @Test
+    public void jp2IccChecked() {
+        byte[] rgb = java.awt.color.ICC_Profile.getInstance(java.awt.color.ColorSpace.CS_sRGB).getData();
+        byte[] px = new byte[4 * 4];
+        assertThrows(IllegalArgumentException.class, () -> Jpeg2000Encoder.encode(px, 4, 4, 1,
+                new Jpeg2000Encoder.Options().format(Jpeg2000Encoder.Format.JP2).iccProfile(rgb)));
+        assertThrows(IllegalArgumentException.class, () -> Jpeg2000Encoder.encode(px, 4, 4, 1,
+                new Jpeg2000Encoder.Options().format(Jpeg2000Encoder.Format.JP2).iccProfile(new byte[20])));
+    }
+
+    /** A JP2 file with the COM segments taken out of its codestream, and the jp2c length to match. */
+    static byte[] jp2WithoutCom(byte[] jp2) {
+        int k = 0;
+        while (true) {
+            int len = ((jp2[k] & 0xff) << 24) | ((jp2[k + 1] & 0xff) << 16) | ((jp2[k + 2] & 0xff) << 8) | (jp2[k + 3] & 0xff);
+            int type = ((jp2[k + 4] & 0xff) << 24) | ((jp2[k + 5] & 0xff) << 16) | ((jp2[k + 6] & 0xff) << 8) | (jp2[k + 7] & 0xff);
+            if (type == 0x6a703263) {
+                byte[] cs = withoutCom(java.util.Arrays.copyOfRange(jp2, k + 8, k + len));
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                out.write(jp2, 0, k);
+                int n = cs.length + 8;
+                out.write(new byte[]{(byte) (n >>> 24), (byte) (n >>> 16), (byte) (n >>> 8), (byte) n}, 0, 4);
+                out.write(jp2, k + 4, 4);
+                out.write(cs, 0, cs.length);
+                out.write(jp2, k + len, jp2.length - k - len);
+                return out.toByteArray();
+            }
+            k += len;
+        }
+    }
+
     /** The codestream without its main-header COM segments. */
     static byte[] withoutCom(byte[] j2k) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();

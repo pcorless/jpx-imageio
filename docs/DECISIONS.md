@@ -312,7 +312,8 @@ code, which isn't ported). `Jpeg2000Layout` decides, ORIGINAL:
 - **Need (GH-2):** ICEpdf redaction writes a burned `JPXDecode` image back as Flate RGB, several
   times larger. PDF takes a raw codestream and keeps the colour space in its dictionary.
 - **Output:** a J2K codestream, never JP2 boxes. Format names `jpeg2000`/`j2k`, suffixes `j2k`/`j2c`;
-  not `jp2`, so `ImageIO.write(img, "jp2", f)` doesn't silently produce a file a JP2 reader rejects.
+  not `jp2`, so `ImageIO.write(img, "jp2", f)` didn't silently produce a file a JP2 reader rejects.
+  Superseded by D-25 once JP2 files could be written (GH-4).
 - **Default lossless:** any compression mode but `MODE_EXPLICIT` with a quality below 1 gives 5/3 +
   RCT, so a plain `ImageIO.write` loses nothing. With OpenJPEG's defaults the result is byte for byte
   `opj_compress`'s, less its COM marker (`Jpeg2000EncoderTest.matchesOpenJpeg`, 9 fixtures; and the
@@ -334,3 +335,25 @@ code, which isn't ported). `Jpeg2000Layout` decides, ORIGINAL:
 - **Images:** alpha is left out with a warning rather than refused (a burned image usually comes from
   an ARGB buffer that is opaque); premultiplied alpha is refused, since the colours alone would be
   wrong; an indexed image becomes grey or RGB from its palette.
+
+## D-25 JP2 files: `jp2` and `jpeg2000` write JP2, `j2k` a codestream (2026-11-27)
+
+- **Need (GH-4):** `ImageIO.write(img, "jp2", f)` should give a file JP2 readers and viewers open.
+- **Names:** `jp2`, `jpeg2000` (and their spellings), suffix `jp2` and MIME `image/jp2` write JP2;
+  `j2k`, suffixes `j2k`/`j2c` write a raw codestream. `jpeg2000` moved from codestream (D-24) to
+  JP2: it is what JAI's JPEG 2000 writer writes under that name, a JP2 file is what a user of a
+  generic name expects, and PDF's `JPXDecode` takes a JP2 file too (the dictionary's colour space
+  wins over the file's). A host that wants the bare codestream asks for `j2k`. The writer is new in
+  0.1.1, so no release wrote a codestream under `jpeg2000`.
+- **Two SPIs, one writer:** an `ImageWriter` isn't told which name it was looked up by, so the
+  format is the SPI's (`Jp2ImageWriterSpi`, `Jpeg2000ImageWriterSpi`), and
+  `Jpeg2000ImageWriteParam.setFormat` overrides it for a host holding either writer.
+- **Boxes:** the minimal JP2 file (T.800 Annex I, written from the spec): the same boxes and field
+  values `opj_compress` 2.5.4 writes, checked byte for byte on the `jp2-gray`, `jp2-rgb` and
+  `jp2-icc-gray` fixtures.
+- **Colour:** sRGB and Java's built-in grey are enumerated (16, 17), as are indexed images,
+  rasters and picked bands (their samples have no other colour space to state). Another grey/RGB
+  ICC profile is written as restricted ICC when it has the tags JP2 allows (grey TRC; RGB
+  colorants and TRCs), else refused: writing sRGB for it would silently change the colours, and
+  J2K remains for writing the components as they are.
+

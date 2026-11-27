@@ -49,7 +49,7 @@ public final class Jpeg2000ImageReaderSpi extends ImageReaderSpi {
                 new String[]{"image/jp2", "image/jpx", "image/jpeg2000"},
                 "io.github.pcorless.jpx.imageio.Jpeg2000ImageReader",
                 new Class<?>[]{ImageInputStream.class},
-                new String[]{"io.github.pcorless.jpx.imageio.Jpeg2000ImageWriterSpi"},
+                new String[]{"io.github.pcorless.jpx.imageio.Jp2ImageWriterSpi", "io.github.pcorless.jpx.imageio.Jpeg2000ImageWriterSpi"},
                 false, null, null, null, null,
                 true, Jpeg2000Metadata.NATIVE, Jpeg2000Metadata.Format.class.getName(), null, null);
     }
